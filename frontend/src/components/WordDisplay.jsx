@@ -26,9 +26,9 @@ export default function WordDisplay({
   /* ── Count hard words for legend visibility ── */
   const hardWordCount = useMemo(() => {
     return words.filter(w => {
-      const clean = w.replace(/[^a-zA-Z']/g, '').toLowerCase()
-      const label = classifiedWords[w] || classifiedWords[clean]
-      return String(label).toLowerCase() === 'hard'
+      const clean = String(w || '').toLowerCase().replace(/[^\w']/g, '')
+      const label = classifiedWords[clean]
+      return label === 'Hard'
     }).length
   }, [words, classifiedWords])
 
@@ -155,9 +155,9 @@ export default function WordDisplay({
         <p className="relative z-10 m-0">
           {words.map((word, i) => {
             const isActive   = i === activeIndex
-            const cleanWord  = word.replace(/[^a-zA-Z']/g, '').toLowerCase()
-            const label      = classifiedWords[word] || classifiedWords[cleanWord]
-            const isHard     = String(label).toLowerCase() === 'hard'
+            const cleanWord  = String(word || '').toLowerCase().replace(/[^\w']/g, '')
+            const label      = classifiedWords[cleanWord]
+            const isHard     = label === 'Hard'
             const isSentenceActive =
               activeSentence && i >= activeSentence.start && i <= activeSentence.end
 

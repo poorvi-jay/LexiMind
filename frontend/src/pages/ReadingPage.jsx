@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import ComplexityBadge from '../components/ComplexityBadge.jsx'
 import DefinitionPanel from '../components/DefinitionPanel.jsx'
@@ -16,6 +16,9 @@ const SAMPLE_TEXT =
   'Renewable technology helps communities reduce pollution. ' +
   'These innovations make clean power available to people around the world.'
 
+function normalizeWord(word) {
+  return String(word || '').toLowerCase().replace(/[^\w']/g, '')
+}
 export default function ReadingPage() {
   const { prefs } = usePrefs()
   const { toast, showToast, hideToast } = useToast()
@@ -32,10 +35,11 @@ export default function ReadingPage() {
   const [isSimplifying, setIsSimplifying] = useState(false)
   const [isUploading, setIsUploading]     = useState(false)
   const [distractionFree, setDistraction] = useState(false)
+  const [classificationReady, setClassificationReady] = useState(false)
 
   // Store the raw word_timings so we can use backend's word list
   const [wordTimings, setWordTimings]     = useState([])
-
+  const classifyRequestRef = useRef(0)
   const { prefetch, getCached, clearCache } = useTTSPrefetch()
 
   const {
@@ -75,37 +79,60 @@ export default function ReadingPage() {
 
   /* ── Load text ── */
   function loadText(raw, options = {}) {
-    const cleaned = raw.trim()
-    setText(raw)
-    setActiveIndex(-1)
-    setWordTimings([])
+  const cleaned = raw.trim()
+  setText(raw)
+  setActiveIndex(-1)
+  setWordTimings([])
 
-    if (!cleaned) {
-      setWords([])
-      setClassified({})
-      setComplexity(null)
-      setSimplified(null)
-      setOriginalText('')
-      clearCache()
-      return
-    }
+  if (!cleaned) {
+    setWords([])
+    setClassified({})
+    setClassificationReady(false)
+    setComplexity(null)
+    setSimplified(null)
+    setOriginalText('')
+    clearCache()
+    return
+  }
 
-    const nextWords = cleaned.split(/\s+/).filter(w => w.length > 0)
-    setWords(nextWords)
-    setOriginalText(options.originalText ?? cleaned)
-    setSimplified(options.simplified ?? null)
+  const nextWords = cleaned.split(/\s+/).filter(w => w.length > 0)
+  setWords(nextWords)
+  setOriginalText(options.originalText ?? cleaned)
+  setSimplified(options.simplified ?? null)
+  setClassified({})
+  setClassificationReady(false)
+
+  const classifyRequestId = classifyRequestRef.current + 1
+  classifyRequestRef.current = classifyRequestId
 
     api
       .post('/reading/complexity', { text: cleaned })
       .then(setComplexity)
       .catch(() => showToast('Could not calculate complexity.', 'warning'))
 
-    const mock = {}
-    nextWords.forEach(word => {
-      const clean = word.replace(/[^a-zA-Z]/g, '')
-      mock[word] = clean.length > 8 ? 'Hard' : 'Easy'
+    api
+  .post('/classify', { words: nextWords })
+  .then(data => {
+    if (classifyRequestRef.current !== classifyRequestId) return
+
+    const classified = {}
+
+    ;(data.results || []).forEach(item => {
+      const cleanWord = normalizeWord(item.word)
+      if (cleanWord) classified[cleanWord] = item.label
     })
-    setClassified(mock)
+
+    setClassified(classified)
+    setClassificationReady(true)
+  })
+  .catch(error => {
+    if (classifyRequestRef.current !== classifyRequestId) return
+
+    console.error('Could not classify hard words:', error)
+    setClassified({})
+    setClassificationReady(true)
+  })
+
   }
 
   /* ── File upload ── */
@@ -162,7 +189,7 @@ export default function ReadingPage() {
   }
 
   function handleWordClick(word) {
-    const clean = word.replace(/[^a-zA-Z]/g, '')
+    const clean = normalizeWord(word)
     if (!clean) return
     setSelectedWord(clean)
     playWord(clean)
@@ -226,7 +253,7 @@ export default function ReadingPage() {
     setActiveIndex(-1)
   }
 
-    async function handleSpeedChange(nextSpeed) {
+  async function handleSpeedChange(nextSpeed) {
     setSpeed(nextSpeed)
 
     if (!isPlaying) return
@@ -245,6 +272,22 @@ export default function ReadingPage() {
   const hasText = displayWords.length > 0 || words.length > 0
   const showWords = displayWords.length > 0 ? displayWords : words
   const isAudioActive = isPlaying || isPaused
+
+  const classifierHardWordPct = useMemo(() => {
+    if (!classificationReady || words.length === 0) return null
+
+    const hardCount = words.filter(word => {
+      const clean = normalizeWord(word)
+      return classifiedWords[clean] === 'Hard'
+    }).length
+
+    return Math.round((hardCount / words.length) * 100)
+  }, [classificationReady, words, classifiedWords])
+
+  const displayedComplexity = useMemo(() => {
+    if (!complexity || classifierHardWordPct === null) return complexity
+    return { ...complexity, hard_word_pct: classifierHardWordPct }
+  }, [complexity, classifierHardWordPct])
 
   return (
     <main
@@ -429,7 +472,7 @@ export default function ReadingPage() {
                   </div>
                 </div>
 
-                {complexity && <ComplexityBadge complexity={complexity} />}
+                {displayedComplexity && <ComplexityBadge complexity={displayedComplexity} />}
 
                 {simplified && (
                   <div
