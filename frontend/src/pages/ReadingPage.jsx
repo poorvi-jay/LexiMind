@@ -39,7 +39,7 @@ export default function ReadingPage() {
   const { prefetch, getCached, clearCache } = useTTSPrefetch()
 
   const {
-    play, pause, resume, stop, playWord,
+    play, pause, resume, stop, playWord, getCurrentWordIndex,
     isPlaying, isPaused, isLoading,
     error: ttsError, totalDurationMs,
   } = useTTSPlayer(useCallback(i => setActiveIndex(i), []))
@@ -47,6 +47,17 @@ export default function ReadingPage() {
   useEffect(() => {
     if (ttsError) showToast(`Could not play audio: ${ttsError}`, 'error')
   }, [ttsError, showToast])
+
+    useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape' && distractionFree) {
+        setDistraction(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [distractionFree])
 
   useEffect(() => {
     if (text.trim()) prefetch(text.trim(), speed, prefs.phrasePauses)
@@ -213,6 +224,22 @@ export default function ReadingPage() {
     stop()
     setWordTimings([])
     setActiveIndex(-1)
+  }
+
+    async function handleSpeedChange(nextSpeed) {
+    setSpeed(nextSpeed)
+
+    if (!isPlaying) return
+
+    const currentIndex = Math.max(getCurrentWordIndex(), activeIndex, 0)
+    const sourceWords = showWords.length > 0 ? showWords : words
+    const remainingText = sourceWords.slice(currentIndex).join(' ')
+
+    if (!remainingText.trim()) return
+
+    stop()
+    setWordTimings([])
+    await play(remainingText, nextSpeed, prefs.phrasePauses, null, currentIndex)
   }
 
   const hasText = displayWords.length > 0 || words.length > 0
@@ -534,7 +561,7 @@ export default function ReadingPage() {
                 max="2.0"
                 step="0.1"
                 value={speed}
-                onChange={e => setSpeed(Number(e.target.value))}
+                onChange={e => handleSpeedChange(Number(e.target.value))}
                 className="w-20 accent-blue-600 sm:w-24"
                 aria-label="Reading speed"
               />

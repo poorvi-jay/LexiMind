@@ -28,7 +28,7 @@ export default function WordDisplay({
     return words.filter(w => {
       const clean = w.replace(/[^a-zA-Z']/g, '').toLowerCase()
       const label = classifiedWords[w] || classifiedWords[clean]
-      return label === 'Hard'
+      return String(label).toLowerCase() === 'hard'
     }).length
   }, [words, classifiedWords])
 
@@ -157,7 +157,7 @@ export default function WordDisplay({
             const isActive   = i === activeIndex
             const cleanWord  = word.replace(/[^a-zA-Z']/g, '').toLowerCase()
             const label      = classifiedWords[word] || classifiedWords[cleanWord]
-            const isHard     = label === 'Hard'
+            const isHard     = String(label).toLowerCase() === 'hard'
             const isSentenceActive =
               activeSentence && i >= activeSentence.start && i <= activeSentence.end
 

@@ -1,7 +1,7 @@
 import { PRESETS } from '../hooks/usePreferences'
 import { usePrefs } from '../context/PreferencesContext'
 
-const FONTS = ['Lexend', 'Arial', 'Verdana', 'OpenDyslexic']
+const FONTS = ['Lexend', 'Atkinson Hyperlegible', 'Arial', 'Verdana', 'OpenDyslexic']
 
 const OVERLAYS = [
   { label: 'White', value: '#FFFFFF' },
@@ -29,7 +29,7 @@ function AccessibilitySummary({ prefs }) {
     { ok: prefs.lineSpacing >= 1.8, label: 'Comfortable line spacing' },
     { ok: prefs.fontSize >= 16, label: 'Accessible font size' },
     {
-      ok: ['Lexend', 'OpenDyslexic', 'Verdana'].includes(prefs.font),
+      ok: ['Lexend', 'Atkinson Hyperlegible', 'OpenDyslexic', 'Verdana'].includes(prefs.font),
       label: 'Reader-friendly font',
     },
     { ok: prefs.wordSpacing >= 2, label: 'Adequate word spacing' },

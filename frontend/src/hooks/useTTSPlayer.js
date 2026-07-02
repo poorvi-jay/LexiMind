@@ -12,6 +12,7 @@ export function useTTSPlayer(onWordChange) {
   const audioRef      = useRef(null)
   const timingsRef    = useRef([])
   const wordIndexRef  = useRef(-1)
+  const baseIndexRef  = useRef(0)
   const rafRef        = useRef(null)
   const scaleRef      = useRef(1)
 
@@ -84,7 +85,8 @@ export function useTTSPlayer(onWordChange) {
 
       if (wordIdx !== wordIndexRef.current) {
         wordIndexRef.current = wordIdx
-        onWordChange(wordIdx)
+        onWordChange(wordIdx >= 0 ? baseIndexRef.current + wordIdx : -1)
+
       }
 
       rafRef.current = requestAnimationFrame(tick)
@@ -103,12 +105,14 @@ export function useTTSPlayer(onWordChange) {
   /* ══════════════════════════════════════════════
      PLAY — fixed: no double src assignment
      ══════════════════════════════════════════════ */
-  const play = useCallback(async (text, speed = 1.0, phrasePauses = true, prefetched = null) => {
+  const play = useCallback(async (text, speed = 1.0, phrasePauses = true, prefetched = null, baseIndex = 0) => {
     try {
       setIsLoading(true)
       setError(null)
       setIsPaused(false)
       stopSync()
+
+      
 
       if (audioRef.current) {
         audioRef.current.pause()
@@ -154,6 +158,7 @@ export function useTTSPlayer(onWordChange) {
       audioRef.current     = audio
       timingsRef.current   = wordTimings || []
       wordIndexRef.current = -1
+      baseIndexRef.current = baseIndex
       scaleRef.current     = 1
       setTotalDurationMs(durationMs)
 
@@ -192,6 +197,7 @@ export function useTTSPlayer(onWordChange) {
         console.log('[TTS] audio ended naturally')
         stopSync()
         wordIndexRef.current = -1
+        baseIndexRef.current = 0
         setIsPlaying(false)
         setIsPaused(false)
         onWordChange(-1)
@@ -260,6 +266,7 @@ export function useTTSPlayer(onWordChange) {
     }
     timingsRef.current   = []
     wordIndexRef.current = -1
+    baseIndexRef.current = 0
     scaleRef.current     = 1
     setIsPlaying(false)
     setIsPaused(false)
@@ -286,8 +293,14 @@ export function useTTSPlayer(onWordChange) {
     }
   }, [])
 
+  const getCurrentWordIndex = useCallback(() => {
+    return wordIndexRef.current >= 0
+      ? baseIndexRef.current + wordIndexRef.current
+      : -1
+  }, [])
+
   return {
-    play, pause, resume, stop, playWord,
+    play, pause, resume, stop, playWord, getCurrentWordIndex,
     isPlaying, isPaused, isLoading, error, totalDurationMs,
   }
 }

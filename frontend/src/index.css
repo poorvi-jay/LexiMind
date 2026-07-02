@@ -1,11 +1,12 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible&family=Lexend:wght@400;500;600;700&display=swap');
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ═══════════════════════════════════════════════
    CSS CUSTOM PROPERTIES
    ═══════════════════════════════════════════════ */
 :root {
-  --leximind-font: 'Lexend', Arial, Verdana, sans-serif;
+  --leximind-font: 'Lexend', 'Atkinson Hyperlegible', Arial, Verdana, sans-serif;
   --leximind-overlay: #FFFFFF;
   --leximind-font-size: 18px;
   --leximind-line-spacing: 2;
