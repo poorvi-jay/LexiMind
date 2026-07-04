@@ -1,11 +1,20 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="LexiMind AI API", version="5.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: runs once before the app starts accepting requests
+    init_db()
+    yield
+    # Shutdown: nothing needed yet, but this is where cleanup would go
+
+
+app = FastAPI(title="LexiMind AI API", version="5.0", lifespan=lifespan)
 
 configured_origins = [
     origin.strip()
@@ -33,7 +42,8 @@ from backend.routers.classify import router as classify_router  # import the cla
 from backend.routers.nlp import router as nlp_router
 from backend.routers.auth import router as auth_router
 from backend.routers.writing import router as writing_router
- 
+from backend.models_temp import init_db
+
 app.include_router(nlp_router)
 app.include_router(auth_router)
 app.include_router(writing_router)
@@ -41,6 +51,8 @@ app.include_router(ocr_router, tags=["OCR"])
 app.include_router(tts_router, tags=["TTS"])
 app.include_router(reading_router, tags=["Reading"])
 app.include_router(classify_router, tags=["Classify"])  # include the classify router with a tag
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "5.0"}

@@ -3,17 +3,72 @@ TEMPORARY DATABASE MODELS — Owner: M2
 ====================================
 This file is a STOPGAP, not the final schema.
 
-Per Build Guide Section 0.2: no SQLAlchemy models, no Alembic
-migrations, and no `users` table exist in the repo yet. This file
-will hold a minimal `users` table (email, password hash, pref_*
-columns) so Authentication isn't blocked while waiting for the
-real 6-table schema (PRD Section 4).
+Per Build Guide Section 4.1: this holds a minimal `users` table
+(email, password hash, pref_* columns) so Authentication isn't
+blocked while waiting for the real 6-table schema (PRD Section 4).
 
 When the full schema lands, this file's `User` model gets merged
 into it and this file is deleted. Do not build permanent
 functionality on top of it without expecting that migration.
+Avoid SQLite-specific raw SQL anywhere in the app, since this will
+eventually migrate to Postgres.
 
-STATUS: Empty. Populated in the Auth phase (Task ~14).
+STATUS: IMPLEMENTED (Task 6) — users table + SQLite connection.
 """
+import os
+import uuid
+import datetime
 
-# SQLAlchemy Base and User model will be defined here later.
+from sqlalchemy import Column, String, Boolean, Integer, DateTime, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(100))
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Preference columns — mirrors M1's accessibility settings so
+    # Auth (F03/F04) can persist them server-side instead of
+    # localStorage (per Handover Section 7's known-issue note).
+    # Add more pref_* columns here as needed, matching PRD Section 4.
+    pref_font = Column(String(50), default="Arial")
+    pref_overlay = Column(String(7), default="#FFFFFF")
+    pref_font_size = Column(Integer, default=18)
+    pref_dark_mode = Column(Boolean, default=False)
+
+
+# Pin the DB file to backend/'s own directory, regardless of which
+# folder uvicorn is launched from — avoids a repeat of the
+# "ModuleNotFoundError: No module named 'backend'" class of bug
+# caused by cwd-dependent paths.
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DB_PATH = os.path.join(_BASE_DIR, "dev.db")
+
+engine = create_engine(
+    f"sqlite:///{_DB_PATH}", connect_args={"check_same_thread": False}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def init_db():
+    """Create all tables if they don't already exist. Called once at
+    app startup in main.py — safe to call repeatedly, no-op if tables
+    already exist."""
+    Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    """FastAPI dependency — yields a DB session, always closed after
+    the request completes, even if an exception occurs."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
