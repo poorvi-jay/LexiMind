@@ -13,7 +13,7 @@ don't add it now, it would block testing before Auth exists.
 """
 from fastapi import APIRouter
 from pydantic import BaseModel
-
+from backend.services.prediction_service import predict_words, predict_phrase
 from backend.services.nlp_service import (
     check_grammar,
     check_phonetic,
@@ -33,6 +33,26 @@ class CheckResponse(BaseModel):
     grammar: list[dict]
     homophones: list[dict]
 
+class PredictRequest(BaseModel):
+    prefix: str
+
+
+class PredictResponse(BaseModel):
+    suggestions: list[str]
+    phrase_suggestion: str
+
+
+@router.post("/predict", response_model=PredictResponse)
+async def predict(req: PredictRequest):
+    """
+    Generate word/phrase completions for the given text prefix.
+    Response shape per PRD contract: { suggestions[3], phrase_suggestion }
+    phrase_suggestion is "" (never an error) when unusable — AC-22.
+    """
+    return {
+        "suggestions": predict_words(req.prefix),
+        "phrase_suggestion": predict_phrase(req.prefix),
+    }
 
 @router.post("/check", response_model=CheckResponse)
 async def check(req: CheckRequest):
