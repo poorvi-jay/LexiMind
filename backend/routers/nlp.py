@@ -18,6 +18,7 @@ from backend.services.nlp_service import (
     check_grammar,
     check_phonetic,
     check_homophones,
+    nlp as spacy_nlp,
 )
 
 router = APIRouter(prefix="/nlp", tags=["NLP"])
@@ -35,18 +36,9 @@ class CheckResponse(BaseModel):
 
 @router.post("/check", response_model=CheckResponse)
 async def check(req: CheckRequest):
-    """
-    Run grammar, phonetic spelling, and homophone checks on the
-    given text. Response shape is fixed per the PRD's endpoint
-    contract: { spelling[], grammar[], homophones[] }.
-
-    Only 'grammar' is populated for now. 'spelling' and
-    'homophones' will be filled in by Tasks 3 and 4 without
-    changing this response shape, so frontend integration can
-    start against this contract immediately if needed.
-    """
+    doc = spacy_nlp(req.text)
     return {
         "spelling": check_phonetic(req.text),
         "grammar": check_grammar(req.text),
-        "homophones": check_homophones(req.text),
+        "homophones": check_homophones(req.text, doc),
     }

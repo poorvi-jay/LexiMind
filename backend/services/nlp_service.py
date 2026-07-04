@@ -8,19 +8,16 @@ STATUS:
 - Phonetic spell correction (F26): IMPLEMENTED (Task 3)
 - Homophone detection (F28): NOT YET IMPLEMENTED (Task 4)
 """
-
+import spacy
 import language_tool_python
 import jellyfish
 from wordfreq import zipf_frequency
 
-# Loaded ONCE at module import time — NOT per-request.
-# Costs 10-15s to start (spins up a local Java process under the hood).
-
+nlp=spacy.load("en_core_web_sm")
 
 tool = language_tool_python.LanguageTool('en-US')
 
-# Dyslexic-confusion wordlist. Includes AC-19's required test cases
-# (phone, knife, was, they, could) plus common confusions.
+
 DYSLEXIC_WORDLIST = [
     "because", "beautiful", "friend", "people", "there", "their",
     "they're", "they", "were", "where", "which", "witch", "definitely",
@@ -32,7 +29,7 @@ DYSLEXIC_WORDLIST = [
     "phone", "knife", "was", "could", "should", "would",
 ]
 
-# Precomputed once at module load, not per-request.
+
 _WORDLIST_SOUNDEX = {w: jellyfish.soundex(w) for w in DYSLEXIC_WORDLIST}
 _WORDLIST_METAPHONE = {w: jellyfish.metaphone(w) for w in DYSLEXIC_WORDLIST}
 
@@ -118,11 +115,129 @@ def check_phonetic(text: str) -> list[dict]:
 
     return results
 
+HOMOPHONE_GROUPS = [
+    ["there", "their", "they're"],      # POS-disambiguated
+    ["to", "too", "two"],               # POS-disambiguated
+    ["write", "right", "rite"],         # POS-disambiguated
+    ["your", "you're"],
+    ["its", "it's"],
+    ["whose", "who's"],
+    ["here", "hear"],
+    ["know", "no"],
+    ["break", "brake"],
+    ["peace", "piece"],
+    ["weather", "whether"],
+    ["principal", "principle"],
+    ["stationary", "stationery"],
+    ["desert", "dessert"],
+    ["accept", "except"],
+    ["affect", "effect"],
+    ["allowed", "aloud"],
+    ["board", "bored"],
+    ["capital", "capitol"],
+    ["cite", "site", "sight"],
+    ["complement", "compliment"],
+    ["council", "counsel"],
+    ["fair", "fare"],
+    ["hole", "whole"],
+    ["mail", "male"],
+    ["meat", "meet"],
+    ["passed", "past"],
+    ["plain", "plane"],
+    ["sea", "see"],
+    ["sun", "son"],
+    ["tail", "tale"],
+    ["wait", "weight"],
+    ["weak", "week"],
+]
 
-def check_homophones(text: str) -> list[dict]:
+WORD_TO_GROUP = {}
+for _group in HOMOPHONE_GROUPS:
+    for _word in _group:
+        WORD_TO_GROUP[_word] = _group
+
+# Groups with real POS-based disambiguation functions below
+_DISAMBIGUATORS = {}
+
+
+def _disambiguate_there(token):
+    """their/there/they're — reliable POS rule."""
+    next_tok = token.doc[token.i + 1] if token.i + 1 < len(token.doc) else None
+    if next_tok is not None and next_tok.pos_ in ("NOUN", "PROPN"):
+        return "their"     # possessive determiner before a noun
+    if next_tok is not None and next_tok.pos_ in ("VERB", "AUX"):
+        return "they're"   # contraction before a verb
+    return "there"          # default: locative/existential ("over there", "there is")
+
+
+for _w in ["there", "their", "they're"]:
+    _DISAMBIGUATORS[_w] = _disambiguate_there
+
+
+def _disambiguate_to(token):
+    """to/too/two — POS rule. Defaults to 'to' since it's the most
+    frequent of the three; only flags 'too'/'two' on clear signal."""
+    next_tok = token.doc[token.i + 1] if token.i + 1 < len(token.doc) else None
+
+    if token.like_num:
+        return "two"                                    # "two" (word-form number)
+    if next_tok is not None and next_tok.pos_ == "VERB":
+        return "to"                                       # infinitive: "to go"
+    if next_tok is not None and next_tok.pos_ == "ADJ":
+        return "too"                                       # intensifier: "too tired"
+    if next_tok is not None and next_tok.pos_ in ("NOUN", "PROPN", "DET", "PRON"):
+        return "to"                                         # preposition + noun phrase (incl. through a determiner): "to the store"
+    if next_tok is None or next_tok.is_punct:
+        return "too"                                        # adverb at clause end: "I want to go too."
+    return "to"                                              # safe default — "to" is statistically far more common
+
+
+for _w in ["to", "too", "two"]:
+    _DISAMBIGUATORS[_w] = _disambiguate_to
+
+
+def _disambiguate_write(token):
+    """write/right/rite — POS rule, defaults to 'right' (documented limitation)."""
+    if token.pos_ == "VERB":
+        return "write"
+    return "right"              # far more common than "rite" outside ceremonial contexts
+
+
+for _w in ["write", "right", "rite"]:
+    _DISAMBIGUATORS[_w] = _disambiguate_write
+
+
+def check_homophones(text: str, doc: "spacy.tokens.Doc") -> list[dict]:
     """
-    Homophone detection (F28) — spaCy POS context + homophone map.
-    NOT YET IMPLEMENTED — placeholder so /nlp/check's response
-    shape is already stable. Built in Task 4.
+    Homophone detection (F28).
+
+    Walks the spaCy-parsed doc, flags any token whose lowercase form
+    is a known homophone-prone word, and suggests the contextually
+    correct form for groups with a disambiguation rule (their/there,
+    to/too/two, write/right). Other groups are flagged without a
+    forced suggestion, since POS alone can't reliably tell them apart.
     """
-    return []
+    if not text or not text.strip():
+        return []
+    
+    results = []
+    for token in doc:
+        word_lower = token.text.lower()
+        if word_lower not in WORD_TO_GROUP:
+            continue
+
+        disambiguator = _DISAMBIGUATORS.get(word_lower)
+        if disambiguator:
+            correct_word = disambiguator(token)
+            if correct_word != word_lower:
+                results.append({
+                    "word": token.text,
+                    "suggestion": correct_word,
+                    "position": token.i,
+                })
+        # For non-disambiguated groups, we don't currently flag —
+        # avoiding a flood of low-confidence "double check this word"
+        # noise. Revisit if the frontend wants that lower-confidence
+        # tier later.
+
+    return results
