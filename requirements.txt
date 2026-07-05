@@ -11,6 +11,7 @@ nltk>=3.8.1
 wordfreq>=3.0.0
 python-jose[cryptography]
 passlib[bcrypt]
+bcrypt==4.0.1
 language-tool-python
 jellyfish
 spacy
@@ -19,3 +20,4 @@ torch
 sqlalchemy
 pdfplumber>=0.10.0
 groq>=0.4.0
+email-validator>=2.0.0
