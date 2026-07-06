@@ -19,6 +19,10 @@ from jose import jwt
 
 from backend.models_temp import get_db, User
 
+from typing import Optional
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError
+
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 # bcrypt, cost factor 12 per PRD F01 spec. Loaded once, not per-request.
@@ -43,10 +47,24 @@ class UserOut(BaseModel):
     id: str
     name: str
     email: str
+    pref_font: str
+    pref_overlay: str
+    pref_font_size: int
+    pref_dark_mode: bool
 
     class Config:
         from_attributes = True
 
+class PreferencesUpdate(BaseModel):
+    pref_font: Optional[str] = None
+    pref_overlay: Optional[str] = None
+    pref_font_size: Optional[int] = None
+    pref_dark_mode: Optional[bool] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {"pref_dark_mode": True}
+        }
 
 class AuthResponse(BaseModel):
     token: str
@@ -61,6 +79,32 @@ def create_access_token(user_id: str) -> str:
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
+bearer_scheme = HTTPBearer()
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    token = credentials.credentials
+    """
+    Shared dependency for ALL protected routes in the project.
+    Decodes the JWT, looks up the real user row, and raises 401
+    for any failure mode: missing/malformed token, expired token,
+    or a token for a user that no longer exists.
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token.")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User no longer exists.")
+
+    return user
 
 @router.post("/register", response_model=AuthResponse)
 async def register(req: RegisterRequest, db: Session = Depends(get_db)):
@@ -102,3 +146,27 @@ async def login(req: LoginRequest, db: Session = Depends(get_db)):
 
     token = create_access_token(user.id)
     return {"token": token, "user": user}
+
+@router.get("/me", response_model=UserOut)
+async def get_me(current_user: User = Depends(get_current_user)):
+    """F03: Return the logged-in user's profile and preferences."""
+    return current_user
+
+
+@router.patch("/me/preferences", response_model=UserOut)
+async def update_preferences(
+    req: PreferencesUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    F04: Partial update — only fields actually sent in the request
+    body are changed. Fields not sent are left untouched.
+    """
+    updates = req.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(current_user, field, value)
+
+    db.commit()
+    db.refresh(current_user)
+    return current_user
