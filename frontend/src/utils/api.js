@@ -1,8 +1,14 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
+function getToken() {
+  return localStorage.getItem('leximind-token')
+}
+
 async function request(method, path, body = null, isFormData = false) {
   const headers = isFormData ? {} : { 'Content-Type': 'application/json' }
-
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,

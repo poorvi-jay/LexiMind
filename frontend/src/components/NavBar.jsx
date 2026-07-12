@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 const links = [
   { to: '/', label: 'Home' },
@@ -9,6 +10,7 @@ const links = [
 
 export default function NavBar() {
   const { pathname } = useLocation()
+  const { isAuthenticated, user, logout } = useAuth()
 
   return (
     <nav
@@ -73,6 +75,32 @@ export default function NavBar() {
               </Link>
             )
           })}
+        </div>
+
+        {/* ── Auth controls ── */}
+        <div className="flex items-center gap-3">
+          {isAuthenticated ? (
+            <>
+              <span className="hidden text-sm text-gray-600 dark:text-gray-300 sm:block">
+                {user?.name}
+              </span>
+              <button
+                onClick={logout}
+                className="rounded-full border border-gray-200 px-4 py-2 text-sm font-medium
+                           text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300
+                           dark:hover:bg-gray-800"
+              >
+                Log out
+              </button>
+            </>
+          ) : (
+            <Link
+              to="/login"
+              className="rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Log in
+            </Link>
+          )}
         </div>
       </div>
     </nav>
