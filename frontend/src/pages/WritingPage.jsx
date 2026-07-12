@@ -10,25 +10,24 @@ export default function WritingPage() {
   const [results, setResults] = useState({ spelling: [], grammar: [], homophones: [] })
   const [checking, setChecking] = useState(false)
   const [checkError, setCheckError] = useState(null)
-  const debounceTimer = useRef(null)
+  const [predictions, setPredictions] = useState({ suggestions: [], phrase_suggestion: '' })
+  const checkDebounce = useRef(null)
+  const predictDebounce = useRef(null)
+  const textareaRef = useRef(null)
 
-  // Debounced /nlp/check call — fires 800ms after the user stops typing,
-  // resetting the timer on every keystroke so it never fires mid-typing.
+  // ── /nlp/check (Task 12, unchanged) ──
   useEffect(() => {
     if (!content.trim()) {
       setResults({ spelling: [], grammar: [], homophones: [] })
       setCheckError(null)
       return
     }
-
     if (!isAuthenticated) {
       setCheckError('Log in to enable grammar and spelling checks.')
       return
     }
-
-    if (debounceTimer.current) clearTimeout(debounceTimer.current)
-
-    debounceTimer.current = setTimeout(async () => {
+    if (checkDebounce.current) clearTimeout(checkDebounce.current)
+    checkDebounce.current = setTimeout(async () => {
       setChecking(true)
       setCheckError(null)
       try {
@@ -44,9 +43,60 @@ export default function WritingPage() {
         setChecking(false)
       }
     }, 800)
-
-    return () => clearTimeout(debounceTimer.current)
+    return () => clearTimeout(checkDebounce.current)
   }, [content, isAuthenticated])
+
+  // ── /nlp/predict (this task) ──
+  // Debounced 300ms - shorter than /nlp/check's 800ms, since word
+  // suggestions should feel responsive while actively typing.
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setPredictions({ suggestions: [], phrase_suggestion: '' })
+      return
+    }
+
+    if (predictDebounce.current) clearTimeout(predictDebounce.current)
+    predictDebounce.current = setTimeout(async () => {
+      const cursorPos = textareaRef.current?.selectionStart ?? content.length
+      const prefix = content.slice(0, cursorPos)
+      const atWordBoundary = prefix === '' || /\s$/.test(prefix)
+
+      if (!prefix.trim() || !atWordBoundary) {
+        setPredictions({ suggestions: [], phrase_suggestion: '' })
+        return
+      }
+
+      try {
+        const data = await api.post('/nlp/predict', { prefix })
+        setPredictions(data)
+      } catch {
+        setPredictions({ suggestions: [], phrase_suggestion: '' })
+      }
+    }, 300)
+
+    return () => clearTimeout(predictDebounce.current)
+  }, [content, isAuthenticated])
+
+  // Inserts text at the current cursor position, replacing any
+  // selection, then restores focus and moves the cursor to just
+  // after the inserted text.
+  function insertAtCursor(text) {
+    const textarea = textareaRef.current
+    if (!textarea) return
+
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const newContent = content.slice(0, start) + text + content.slice(end)
+    setContent(newContent)
+
+    // Wait for React to re-render with the new value before moving
+    // the cursor, otherwise the browser resets it to the end.
+    requestAnimationFrame(() => {
+      const newPos = start + text.length
+      textarea.focus()
+      textarea.setSelectionRange(newPos, newPos)
+    })
+  }
 
   const totalIssues =
     results.spelling.length + results.grammar.length + results.homophones.length
@@ -62,8 +112,11 @@ export default function WritingPage() {
       </p>
 
       <textarea
+        ref={textareaRef}
         value={content}
         onChange={e => setContent(e.target.value)}
+        onClick={() => setContent(c => c)} // trigger re-check of cursor position on click
+        onKeyUp={() => setContent(c => c)} // trigger re-check of cursor position on arrow keys
         placeholder="Start typing..."
         style={{
           fontFamily: `'${prefs.font}', Arial, Verdana, sans-serif`,
@@ -80,6 +133,35 @@ export default function WritingPage() {
                    dark:focus-visible:ring-blue-900"
         aria-label="Writing area"
       />
+
+      {/* ── Suggestion pills (F29) ── */}
+      {(predictions.suggestions.length > 0 || predictions.phrase_suggestion) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {predictions.suggestions.map((word, i) => (
+            <button
+              key={`w-${i}-${word}`}
+              onClick={() => insertAtCursor(word + ' ')}
+              className="rounded-full border border-gray-200 bg-white px-4 py-1.5 text-sm
+                         font-medium text-gray-700 hover:bg-gray-50
+                         dark:border-gray-700 dark:bg-[#2A2A2A] dark:text-gray-200
+                         dark:hover:bg-gray-800"
+            >
+              {word}
+            </button>
+          ))}
+          {predictions.phrase_suggestion && predictions.phrase_suggestion.trim() !== '' && (
+            <button
+              onClick={() => insertAtCursor(predictions.phrase_suggestion + ' ')}
+              className="rounded-full border border-purple-300 bg-purple-50 px-4 py-1.5 text-sm
+                         font-medium text-purple-700 hover:bg-purple-100
+                         dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-200
+                         dark:hover:bg-purple-950/70"
+            >
+              {predictions.phrase_suggestion}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 min-h-[24px] text-sm">
         {checking && <span className="text-gray-500 dark:text-gray-400">Checking...</span>}
