@@ -43,11 +43,30 @@ class User(Base):
     pref_font_size = Column(Integer, default=18)
     pref_dark_mode = Column(Boolean, default=False)
 
+class SavedDocument(Base):
+    __tablename__ = "saved_documents"
 
-# Pin the DB file to backend/'s own directory, regardless of which
-# folder uvicorn is launched from — avoids a repeat of the
-# "ModuleNotFoundError: No module named 'backend'" class of bug
-# caused by cwd-dependent paths.
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
+    title = Column(String(150), default="Untitled Draft")
+    content = Column(String(50000), default="")
+    template = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class WritingSession(Base):
+    __tablename__ = "writing_sessions"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
+    date = Column(DateTime, default=datetime.datetime.utcnow)
+    word_count = Column(Integer, default=0)
+    spell_error_count = Column(Integer, default=0)
+    grammar_error_count = Column(Integer, default=0)
+    homophone_flag_count = Column(Integer, default=0)
+    template_used = Column(String(50), nullable=True)
+    
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _DB_PATH = os.path.join(_BASE_DIR, "dev.db")
 

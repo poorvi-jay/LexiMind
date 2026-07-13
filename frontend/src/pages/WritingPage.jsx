@@ -11,11 +11,48 @@ export default function WritingPage() {
   const [checking, setChecking] = useState(false)
   const [checkError, setCheckError] = useState(null)
   const [predictions, setPredictions] = useState({ suggestions: [], phrase_suggestion: '' })
+  const [saveStatus, setSaveStatus] = useState(null) // null | 'saving' | 'saved' | 'error'
   const checkDebounce = useRef(null)
   const predictDebounce = useRef(null)
   const textareaRef = useRef(null)
+  const contentRef = useRef(content) // always-current content for the interval closure
 
-  // ── /nlp/check (Task 12, unchanged) ──
+  useEffect(() => {
+    contentRef.current = content
+  }, [content])
+
+  // ── Load existing draft on mount (F31: survives refresh/browser close) ──
+  useEffect(() => {
+    if (!isAuthenticated) return
+    api.get('/writing/autosave')
+      .then(data => setContent(data.content || ''))
+      .catch(() => { /* no draft yet, or not logged in - fine, start blank */ })
+  }, [isAuthenticated])
+
+  // ── Auto-save every 30s, with retry (F31) ──
+  useEffect(() => {
+    if (!isAuthenticated) return
+
+    async function saveWithRetry(retriesLeft = 3) {
+      setSaveStatus('saving')
+      try {
+        await api.patch('/writing/autosave', { content: contentRef.current })
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus(null), 2000)
+      } catch (err) {
+        if (retriesLeft > 0) {
+          setTimeout(() => saveWithRetry(retriesLeft - 1), 2000)
+        } else {
+          setSaveStatus('error')
+        }
+      }
+    }
+
+    const interval = setInterval(() => saveWithRetry(), 30000)
+    return () => clearInterval(interval)
+  }, [isAuthenticated])
+
+  // ── /nlp/check (unchanged from Task 12) ──
   useEffect(() => {
     if (!content.trim()) {
       setResults({ spelling: [], grammar: [], homophones: [] })
@@ -46,26 +83,21 @@ export default function WritingPage() {
     return () => clearTimeout(checkDebounce.current)
   }, [content, isAuthenticated])
 
-  // ── /nlp/predict (this task) ──
-  // Debounced 300ms - shorter than /nlp/check's 800ms, since word
-  // suggestions should feel responsive while actively typing.
+  // ── /nlp/predict (unchanged from Task 13) ──
   useEffect(() => {
     if (!isAuthenticated) {
       setPredictions({ suggestions: [], phrase_suggestion: '' })
       return
     }
-
     if (predictDebounce.current) clearTimeout(predictDebounce.current)
     predictDebounce.current = setTimeout(async () => {
       const cursorPos = textareaRef.current?.selectionStart ?? content.length
       const prefix = content.slice(0, cursorPos)
       const atWordBoundary = prefix === '' || /\s$/.test(prefix)
-
       if (!prefix.trim() || !atWordBoundary) {
         setPredictions({ suggestions: [], phrase_suggestion: '' })
         return
       }
-
       try {
         const data = await api.post('/nlp/predict', { prefix })
         setPredictions(data)
@@ -73,24 +105,16 @@ export default function WritingPage() {
         setPredictions({ suggestions: [], phrase_suggestion: '' })
       }
     }, 300)
-
     return () => clearTimeout(predictDebounce.current)
   }, [content, isAuthenticated])
 
-  // Inserts text at the current cursor position, replacing any
-  // selection, then restores focus and moves the cursor to just
-  // after the inserted text.
   function insertAtCursor(text) {
     const textarea = textareaRef.current
     if (!textarea) return
-
     const start = textarea.selectionStart
     const end = textarea.selectionEnd
     const newContent = content.slice(0, start) + text + content.slice(end)
     setContent(newContent)
-
-    // Wait for React to re-render with the new value before moving
-    // the cursor, otherwise the browser resets it to the end.
     requestAnimationFrame(() => {
       const newPos = start + text.length
       textarea.focus()
@@ -103,9 +127,18 @@ export default function WritingPage() {
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
-      <h1 className="mb-2 text-2xl font-bold tracking-tight text-gray-950 dark:text-white">
-        Writing
-      </h1>
+      <div className="mb-2 flex items-center justify-between">
+        <h1 className="text-2xl font-bold tracking-tight text-gray-950 dark:text-white">
+          Writing
+        </h1>
+        {saveStatus && (
+          <span className="text-xs font-medium text-gray-400 dark:text-gray-500">
+            {saveStatus === 'saving' && 'Saving...'}
+            {saveStatus === 'saved' && '✓ Saved'}
+            {saveStatus === 'error' && 'Could not save'}
+          </span>
+        )}
+      </div>
       <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
         Draft your writing here. Grammar, spelling, and homophone
         suggestions appear automatically as you pause typing.
@@ -115,8 +148,8 @@ export default function WritingPage() {
         ref={textareaRef}
         value={content}
         onChange={e => setContent(e.target.value)}
-        onClick={() => setContent(c => c)} // trigger re-check of cursor position on click
-        onKeyUp={() => setContent(c => c)} // trigger re-check of cursor position on arrow keys
+        onClick={() => setContent(c => c)}
+        onKeyUp={() => setContent(c => c)}
         placeholder="Start typing..."
         style={{
           fontFamily: `'${prefs.font}', Arial, Verdana, sans-serif`,
@@ -134,7 +167,6 @@ export default function WritingPage() {
         aria-label="Writing area"
       />
 
-      {/* ── Suggestion pills (F29) ── */}
       {(predictions.suggestions.length > 0 || predictions.phrase_suggestion) && (
         <div className="mt-3 flex flex-wrap gap-2">
           {predictions.suggestions.map((word, i) => (
