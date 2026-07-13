@@ -1,42 +1,45 @@
 import re
+import torch
 from transformers import pipeline
 
 predictor = pipeline("text-generation", model="distilgpt2")
+tokenizer = predictor.tokenizer
+model = predictor.model
 
 
 def predict_words(prefix: str) -> list[str]:
-    """
-    Generate up to 3 single-word next-word suggestions for the
-    given prefix.
 
-    Note: DistilGPT-2 generates subword tokens, so occasionally a
-    suggestion will be a word fragment (e.g. "irc", "ers") rather
-    than a complete word. This is a known limitation of small
-    models doing single-token generation, discussed with the team
-    and accepted as-is rather than over-filtering (see commit log).
-
-    Returns an empty list if prefix is empty/whitespace-only.
-    """
     if not prefix or not prefix.strip():
         return []
+    
+    prefix = prefix.rstrip()
 
-    results = predictor(
-        prefix,
-        max_new_tokens=1,
-        num_return_sequences=3,
-        do_sample=True,
-        temperature=0.7,
-        pad_token_id=50256,
-    )
+    input_ids = tokenizer(prefix, return_tensors="pt").input_ids
+    input_len = input_ids.shape[1]
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            input_ids,
+            max_new_tokens=6,
+            num_return_sequences=6,
+            do_sample=True,
+            temperature=0.8,
+            pad_token_id=50256,
+        )
 
     words = []
-    for r in results:
-        generated = r["generated_text"][len(prefix):]
-        matches = re.findall(r"\b[a-zA-Z]+\b", generated)
-        if matches and matches[0] not in words:
-            words.append(matches[0])
+    for seq in output_ids:
+        new_tokens = seq[input_len:]  # only the tokens generated, not the prompt
+        generated_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
+        match = re.match(r"\s*([a-zA-Z]+)", generated_text)
+        if match:
+            word = match.group(1)
+            if word.lower() not in [w.lower() for w in words]:
+                words.append(word)
+        if len(words) == 3:
+            break
 
-    return words[:3]
+    return words
 
 
 def predict_phrase(prefix: str) -> str:
@@ -45,22 +48,35 @@ def predict_phrase(prefix: str) -> str:
     phrase continuation for the given prefix.
 
     Per PRD rule: NEVER raises/returns an error for an empty or
-    unusable result — returns "" so the frontend can hide the
+    unusable result - returns "" so the frontend can hide the
     4th suggestion pill (AC-22).
+
+    Fixed alongside predict_words(): uses token-based slicing
+    (not character-slicing, which had an encode/decode alignment
+    bug) and strips trailing whitespace before generating (avoids
+    the "dangling space" issue that caused fragment-like output).
     """
     if not prefix or not prefix.strip():
         return ""
 
-    results = predictor(
-        prefix,
-        max_new_tokens=5,
-        num_return_sequences=1,
-        do_sample=True,
-        temperature=0.7,
-        pad_token_id=50256,
-    )
+    prefix = prefix.rstrip()
 
-    generated = results[0]["generated_text"][len(prefix):]
+    input_ids = tokenizer(prefix, return_tensors="pt").input_ids
+    input_len = input_ids.shape[1]
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            input_ids,
+            max_new_tokens=5,
+            num_return_sequences=1,
+            do_sample=True,
+            temperature=0.7,
+            pad_token_id=50256,
+        )
+
+    new_tokens = output_ids[0][input_len:]
+    generated = tokenizer.decode(new_tokens, skip_special_tokens=True)
+
     phrase = generated.strip().split(".")[0]
     phrase = re.sub(r"[^a-zA-Z\s']", "", phrase).strip()
 
