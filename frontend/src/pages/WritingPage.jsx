@@ -20,6 +20,9 @@ export default function WritingPage() {
   const [showDocs, setShowDocs] = useState(false)
   const [saveTitle, setSaveTitle] = useState('')
   const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [isReading, setIsReading] = useState(false)
+  const [readError, setReadError] = useState(null)
+  const audioRef = useRef(null)
 
   useEffect(() => {
     contentRef.current = content
@@ -181,6 +184,50 @@ export default function WritingPage() {
     }
   }
 
+  async function handleReadBack() {
+    const textarea = textareaRef.current
+    if (!textarea) return
+
+    const selected = content.slice(textarea.selectionStart, textarea.selectionEnd)
+    if (!selected.trim()) {
+      setReadError('Select some text first to read it back.')
+      return
+    }
+
+    setReadError(null)
+    setIsReading(true)
+    try {
+      const data = await api.post('/tts/generate', { text: selected })
+
+      // Convert base64 audio to a playable blob URL
+      const byteChars = atob(data.audio_b64)
+      const byteNumbers = new Array(byteChars.length)
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i)
+      }
+      const byteArray = new Uint8Array(byteNumbers)
+      const blob = new Blob([byteArray], { type: 'audio/mpeg' })
+      const url = URL.createObjectURL(blob)
+
+      if (audioRef.current) {
+        audioRef.current.pause()
+        URL.revokeObjectURL(audioRef.current.src)
+      }
+
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audio.onended = () => setIsReading(false)
+      audio.onerror = () => {
+        setReadError('Could not play audio.')
+        setIsReading(false)
+      }
+      await audio.play()
+    } catch (err) {
+      setReadError('Could not read text right now.')
+      setIsReading(false)
+    }
+  }
+
   async function handleNewDocument() {
     if (content.trim() && !window.confirm('Start a new document? Your current unsaved draft will be cleared.')) {
       return
@@ -239,6 +286,15 @@ export default function WritingPage() {
         >
           New
         </button>
+        <button
+          onClick={handleReadBack}
+          disabled={isReading}
+          className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
+                    text-gray-700 hover:bg-gray-50 disabled:opacity-50
+                    dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          {isReading ? 'Reading...' : 'Read Selection'}
+        </button>
       </div>
 
       {showSaveDialog && (
@@ -258,6 +314,10 @@ export default function WritingPage() {
             Save
           </button>
         </div>
+      )}
+
+      {readError && (
+        <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">{readError}</p>
       )}
 
       {showDocs && (
