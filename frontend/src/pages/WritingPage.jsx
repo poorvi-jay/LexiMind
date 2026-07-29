@@ -119,6 +119,36 @@ export default function WritingPage() {
     return () => clearTimeout(predictDebounce.current)
   }, [content, isAuthenticated])
 
+  // ── Alt+R: read last complete sentence (F47) ──
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.altKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault()
+
+        const sentences = content.match(/[^.!?]+[.!?]+/g) || []
+        const matchedLength = sentences.join('').length
+        const trailing = content.slice(matchedLength).trim()
+
+        let last
+        if (trailing) {
+          // There's unfinished text after the last punctuated sentence -
+          // this is almost certainly what the user just typed and wants
+          // read back, even though it has no period yet (AC-37).
+          last = trailing
+        } else if (sentences.length > 0) {
+          last = sentences[sentences.length - 1].trim()
+        } else {
+          last = content.trim()
+        }
+
+        if (last) playText(last)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [content])
+
   function insertAtCursor(text) {
     const textarea = textareaRef.current
     if (!textarea) return
@@ -184,22 +214,13 @@ export default function WritingPage() {
     }
   }
 
-  async function handleReadBack() {
-    const textarea = textareaRef.current
-    if (!textarea) return
-
-    const selected = content.slice(textarea.selectionStart, textarea.selectionEnd)
-    if (!selected.trim()) {
-      setReadError('Select some text first to read it back.')
-      return
-    }
+  async function playText(text) {
+    if (!text.trim()) return
 
     setReadError(null)
     setIsReading(true)
     try {
-      const data = await api.post('/tts/generate', { text: selected })
-
-      // Convert base64 audio to a playable blob URL
+      const data = await api.post('/tts/generate', { text })
       const byteChars = atob(data.audio_b64)
       const byteNumbers = new Array(byteChars.length)
       for (let i = 0; i < byteChars.length; i++) {
@@ -226,6 +247,17 @@ export default function WritingPage() {
       setReadError('Could not read text right now.')
       setIsReading(false)
     }
+  }
+
+  async function handleReadBack() {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    const selected = content.slice(textarea.selectionStart, textarea.selectionEnd)
+    if (!selected.trim()) {
+      setReadError('Select some text first to read it back.')
+      return
+    }
+    playText(selected)
   }
 
   async function handleNewDocument() {
