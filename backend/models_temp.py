@@ -53,6 +53,7 @@ class SavedDocument(Base):
     template = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    is_draft = Column(Boolean, default=False)
 
 
 class WritingSession(Base):

@@ -16,10 +16,18 @@ export default function WritingPage() {
   const predictDebounce = useRef(null)
   const textareaRef = useRef(null)
   const contentRef = useRef(content) // always-current content for the interval closure
+  const [documents, setDocuments] = useState([])
+  const [showDocs, setShowDocs] = useState(false)
+  const [saveTitle, setSaveTitle] = useState('')
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
 
   useEffect(() => {
     contentRef.current = content
   }, [content])
+
+  useEffect(() => {
+    if (showDocs && isAuthenticated) loadDocuments()
+  }, [showDocs, isAuthenticated])
 
   // ── Load existing draft on mount (F31: survives refresh/browser close) ──
   useEffect(() => {
@@ -122,6 +130,72 @@ export default function WritingPage() {
     })
   }
 
+  async function loadDocuments() {
+    try {
+      const docs = await api.get('/writing/documents')
+      setDocuments(docs)
+    } catch {
+      setDocuments([])
+    }
+  }
+
+  async function handleSaveAs() {
+    if (!saveTitle.trim()) return
+
+    const duplicate = documents.some(
+      doc => doc.title.toLowerCase() === saveTitle.trim().toLowerCase()
+    )
+    if (duplicate && !window.confirm(
+      `A document named "${saveTitle}" already exists. Save as a separate copy anyway?`
+    )) {
+      return
+    }
+
+    try {
+      await api.post('/writing/documents', { title: saveTitle, content })
+      setSaveTitle('')
+      setShowSaveDialog(false)
+      loadDocuments()
+    } catch {
+      /* could add error UI here later */
+    }
+  }
+
+  async function handleLoadDocument(docId) {
+    try {
+      const doc = await api.get(`/writing/documents/${docId}`)
+      setContent(doc.content)
+      setShowDocs(false)
+    } catch {
+      /* could add error UI here later */
+    }
+  }
+
+  async function handleDeleteDocument(docId, e) {
+    e.stopPropagation() // don't trigger loadDocument when clicking delete
+    try {
+      await api.delete(`/writing/documents/${docId}`)
+      loadDocuments()
+    } catch {
+      /* could add error UI here later */
+    }
+  }
+
+  async function handleNewDocument() {
+    if (content.trim() && !window.confirm('Start a new document? Your current unsaved draft will be cleared.')) {
+      return
+    }
+    setContent('')
+    try {
+      await api.patch('/writing/autosave', { content: '' })
+    } catch {
+      /* if this fails, the next 30s autosave cycle will still catch up */
+    }
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+    })
+  }
+
   const totalIssues =
     results.spelling.length + results.grammar.length + results.homophones.length
 
@@ -139,6 +213,77 @@ export default function WritingPage() {
           </span>
         )}
       </div>
+
+      <div className="mb-4 flex gap-2">
+        <button
+          onClick={() => setShowSaveDialog(true)}
+          className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
+                    text-gray-700 hover:bg-gray-50
+                    dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          Save As...
+        </button>
+        <button
+          onClick={() => setShowDocs(v => !v)}
+          className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
+                    text-gray-700 hover:bg-gray-50
+                    dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          My Documents
+        </button>
+        <button
+          onClick={handleNewDocument}
+          className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
+                    text-gray-700 hover:bg-gray-50
+                    dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          New
+        </button>
+      </div>
+
+      {showSaveDialog && (
+        <div className="mb-4 flex gap-2">
+          <input
+            type="text"
+            value={saveTitle}
+            onChange={e => setSaveTitle(e.target.value)}
+            placeholder="Document title..."
+            className="flex-1 rounded-xl border border-gray-200 p-2 text-sm
+                      dark:border-gray-700 dark:bg-[#1E1E1E] dark:text-white"
+          />
+          <button
+            onClick={handleSaveAs}
+            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Save
+          </button>
+        </div>
+      )}
+
+      {showDocs && (
+        <div className="mb-4 rounded-2xl border border-gray-200 p-3 dark:border-gray-800">
+          {documents.length === 0 && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No saved documents yet.</p>
+          )}
+          {documents.map(doc => (
+            <div
+              key={doc.id}
+              onClick={() => handleLoadDocument(doc.id)}
+              className="flex cursor-pointer items-center justify-between rounded-lg px-2 py-2
+                        text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
+            >
+              <span className="text-gray-800 dark:text-gray-200">{doc.title}</span>
+              <button
+                onClick={e => handleDeleteDocument(doc.id, e)}
+                className="text-xs text-red-500 hover:text-red-700 dark:text-red-400"
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
         Draft your writing here. Grammar, spelling, and homophone
         suggestions appear automatically as you pause typing.
