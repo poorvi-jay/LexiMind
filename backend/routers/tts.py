@@ -1,11 +1,9 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from backend.services import tts_service
+from backend.routers.auth import get_current_user
 
 router = APIRouter()
-
-def get_current_user():
-    return {"id": "dev-user"}
 
 class TTSRequest(BaseModel):
     text: str

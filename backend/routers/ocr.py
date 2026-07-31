@@ -1,11 +1,12 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import Annotated
 from backend.services import ocr_service
+from backend.routers.auth import get_current_user
 
 router = APIRouter()
 
 @router.post("/ocr/image")
-async def ocr_image(file: Annotated[UploadFile, File()]):
+async def ocr_image(file: Annotated[UploadFile, File()], current_user = Depends(get_current_user)):
     if file.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(422, "Please upload a JPG or PNG file.")
     img_bytes = await file.read()
@@ -15,7 +16,7 @@ async def ocr_image(file: Annotated[UploadFile, File()]):
     return {"text": text, "word_count": len(text.split())}
 
 @router.post("/ocr/pdf")
-async def ocr_pdf(file: Annotated[UploadFile, File()]):
+async def ocr_pdf(file: Annotated[UploadFile, File()], current_user = Depends(get_current_user)):
     if file.content_type != "application/pdf":
         raise HTTPException(422, "Please upload a PDF file.")
     pdf_bytes = await file.read()

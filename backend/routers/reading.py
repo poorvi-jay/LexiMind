@@ -9,6 +9,7 @@ Also enriches /reading/define response with all meanings + syllable_count.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from backend.services import simplification_service
+from backend.routers.auth import get_current_user
 import httpx
 import re
 
@@ -24,10 +25,6 @@ except LookupError:
 
 
 router = APIRouter()
-
-
-def get_current_user():
-    return {"id": "dev-user"}
 
 
 class SimplifyRequest(BaseModel):
