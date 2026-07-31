@@ -1,19 +1,17 @@
 """
-Writing Router — Owner: M2 (F25, F31, F32)
-Exposes /writing/autosave (F31) and /writing/documents CRUD (F32).
+Writing Router — Owner: M2 (F25, F31, F32, F48)
+Exposes /writing/autosave (F31), /writing/documents CRUD (F32),
+and /writing/template-used (F48).
 
 STATUS:
 - /writing/autosave (F31): IMPLEMENTED (Task 14)
 - /writing/documents CRUD (F32): IMPLEMENTED (Task 15)
+- /writing/template-used (F48): IMPLEMENTED (Task 18)
 
 Design note: autosave maintains ONE "current draft" row per user in
-saved_documents, explicitly flagged via is_draft=True. This flag was
-added after a real bug: without it, autosave's "find most recently
-updated row" logic could accidentally hijack and overwrite a named
-document the user had just opened, since there was no way to tell
-"the draft" apart from "a document you deliberately saved." Named
-saves (via Save As) are always created with is_draft=False, so
-autosave can never touch them.
+saved_documents, explicitly flagged via is_draft=True. Named saves
+(via Save As) are always created with is_draft=False, so autosave
+can never touch them.
 """
 from datetime import datetime
 
@@ -21,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.models_temp import get_db, SavedDocument, User
+from backend.models_temp import get_db, SavedDocument, WritingSession, User
 from backend.routers.auth import get_current_user
 
 router = APIRouter(prefix="/writing", tags=["Writing"])
@@ -73,11 +71,19 @@ class DeleteResponse(BaseModel):
     deleted: bool
 
 
+class TemplateLogRequest(BaseModel):
+    template: str  # "essay" | "email" | "report"
+
+
+class TemplateLogResponse(BaseModel):
+    logged: bool
+
+
 def _get_or_create_draft(db: Session, user_id: str) -> SavedDocument:
     """
     Finds the user's dedicated autosave draft row (is_draft=True),
-    or creates one. This is intentionally separate from any named
-    document the user has saved via "Save As" - see module docstring.
+    or creates one. Intentionally separate from any named document
+    saved via "Save As" - see module docstring.
     """
     draft = (
         db.query(SavedDocument)
@@ -188,3 +194,23 @@ async def delete_document(
     db.delete(doc)
     db.commit()
     return {"deleted": True}
+
+
+@router.post("/template-used", response_model=TemplateLogResponse)
+async def log_template_used(
+    req: TemplateLogRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    F48: Log which template was used, per PRD's writing_sessions.
+    template_used column. Only this one field is populated for now -
+    word_count/error counts are out of scope for F48 specifically.
+    """
+    session = WritingSession(
+        user_id=current_user.id,
+        template_used=req.template,
+    )
+    db.add(session)
+    db.commit()
+    return {"logged": True}

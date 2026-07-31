@@ -3,6 +3,62 @@ import { usePrefs } from '../context/PreferencesContext'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../utils/api'
 
+const TEMPLATES = {
+  essay: {
+    label: 'Essay',
+    scaffold: `Introduction
+
+State your main idea or argument here.
+
+Body Paragraph 1
+
+Explain your first supporting point here.
+
+Body Paragraph 2
+
+Explain your second supporting point here.
+
+Conclusion
+
+Summarize your argument and restate your main idea.`,
+  },
+  email: {
+    label: 'Email',
+    scaffold: `Subject: 
+
+Dear [Name],
+
+I am writing to 
+
+Thank you for your time.
+
+Best regards,
+[Your Name]`,
+  },
+  report: {
+    label: 'Report',
+    scaffold: `Title: 
+
+Summary
+
+Briefly summarize the purpose of this report.
+
+Findings
+
+Describe what you found or observed.
+
+Recommendations
+
+Suggest next steps or conclusions.`,
+  },
+}
+
+const TEMPLATE_TITLES = {
+  essay: 'ESSAY WRITING',
+  email: 'EMAIL DRAFT',
+  report: 'REPORT WRITING',
+}
+
 export default function WritingPage() {
   const { prefs } = usePrefs()
   const { isAuthenticated } = useAuth()
@@ -23,6 +79,10 @@ export default function WritingPage() {
   const [isReading, setIsReading] = useState(false)
   const [readError, setReadError] = useState(null)
   const audioRef = useRef(null)
+  const [showTemplates, setShowTemplates] = useState(false)
+  const [activeTemplate, setActiveTemplate] = useState(
+    () => localStorage.getItem('leximind-active-template') || null
+  )
 
   useEffect(() => {
     contentRef.current = content
@@ -31,6 +91,14 @@ export default function WritingPage() {
   useEffect(() => {
     if (showDocs && isAuthenticated) loadDocuments()
   }, [showDocs, isAuthenticated])
+
+  useEffect(() => {
+    if (activeTemplate) {
+      localStorage.setItem('leximind-active-template', activeTemplate)
+    } else {
+      localStorage.removeItem('leximind-active-template')
+    }
+  }, [activeTemplate])
 
   // ── Load existing draft on mount (F31: survives refresh/browser close) ──
   useEffect(() => {
@@ -131,9 +199,6 @@ export default function WritingPage() {
 
         let last
         if (trailing) {
-          // There's unfinished text after the last punctuated sentence -
-          // this is almost certainly what the user just typed and wants
-          // read back, even though it has no period yet (AC-37).
           last = trailing
         } else if (sentences.length > 0) {
           last = sentences[sentences.length - 1].trim()
@@ -198,6 +263,7 @@ export default function WritingPage() {
     try {
       const doc = await api.get(`/writing/documents/${docId}`)
       setContent(doc.content)
+      setActiveTemplate(null) // loading a real saved document exits "template mode"
       setShowDocs(false)
     } catch {
       /* could add error UI here later */
@@ -265,6 +331,7 @@ export default function WritingPage() {
       return
     }
     setContent('')
+    setActiveTemplate(null)
     try {
       await api.patch('/writing/autosave', { content: '' })
     } catch {
@@ -275,8 +342,29 @@ export default function WritingPage() {
     })
   }
 
+  async function handleUseTemplate(templateKey) {
+    if (content.trim() && !window.confirm(
+      'Load this template? Your current unsaved draft will be cleared.'
+    )) {
+      return
+    }
+
+    setContent(TEMPLATES[templateKey].scaffold)
+    setActiveTemplate(templateKey)
+
+    try {
+      await api.post('/writing/template-used', { template: templateKey })
+    } catch {
+      /* logging failure shouldn't block the user from using the template */
+    }
+
+    textareaRef.current?.focus()
+  }
+
   const totalIssues =
     results.spelling.length + results.grammar.length + results.homophones.length
+
+  const lineHeightPx = prefs.lineSpacing * prefs.fontSize
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -293,7 +381,7 @@ export default function WritingPage() {
         )}
       </div>
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap gap-2">
         <button
           onClick={() => setShowSaveDialog(true)}
           className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
@@ -327,6 +415,14 @@ export default function WritingPage() {
         >
           {isReading ? 'Reading...' : 'Read Selection'}
         </button>
+        <button
+          onClick={() => setShowTemplates(v => !v)}
+          className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
+                    text-gray-700 hover:bg-gray-50
+                    dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        >
+          Templates
+        </button>
       </div>
 
       {showSaveDialog && (
@@ -345,6 +441,25 @@ export default function WritingPage() {
           >
             Save
           </button>
+        </div>
+      )}
+
+      {showTemplates && (
+        <div className="mb-4 flex gap-2 rounded-2xl border border-gray-200 p-3 dark:border-gray-800">
+          {Object.entries(TEMPLATES).map(([key, tpl]) => (
+            <button
+              key={key}
+              onClick={() => {
+                handleUseTemplate(key)
+                setShowTemplates(false)
+              }}
+              className="rounded-xl border border-gray-200 px-4 py-1.5 text-sm font-medium
+                         text-gray-700 hover:bg-gray-50
+                         dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+            >
+              {tpl.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -376,10 +491,16 @@ export default function WritingPage() {
         </div>
       )}
 
-      <p className="mb-6 text-sm text-gray-500 dark:text-gray-400">
+      <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
         Draft your writing here. Grammar, spelling, and homophone
         suggestions appear automatically as you pause typing.
       </p>
+
+      {activeTemplate && (
+        <div className="mb-2 text-center text-lg font-bold uppercase tracking-wide text-gray-700 dark:text-gray-300">
+          {TEMPLATE_TITLES[activeTemplate]}
+        </div>
+      )}
 
       <textarea
         ref={textareaRef}
@@ -394,6 +515,9 @@ export default function WritingPage() {
           lineHeight: prefs.lineSpacing,
           wordSpacing: `${prefs.wordSpacing}px`,
           backgroundColor: prefs.darkMode ? '#1E1E1E' : prefs.overlay,
+          backgroundImage: activeTemplate
+            ? `repeating-linear-gradient(transparent, transparent ${lineHeightPx - 1}px, ${prefs.darkMode ? '#3A3A3A' : '#E5E7EB'} ${lineHeightPx}px)`
+            : 'none',
         }}
         className="min-h-[400px] w-full rounded-2xl border border-gray-200 p-5
                    text-gray-900 shadow-sm outline-none transition-colors
