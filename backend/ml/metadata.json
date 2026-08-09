@@ -1,0 +1,30 @@
+{
+  "dataset": "CompLex 2.0 (CC-BY 4.0, MMU-TDMLab/CompLex)",
+  "ground_truth": "word-level mean of contextual complexity scores",
+  "feature_order": [
+    "syllables",
+    "frequency",
+    "length"
+  ],
+  "algorithm": "RandomForestClassifier",
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 8,
+    "min_samples_leaf": 10,
+    "random_state": 42
+  },
+  "hard_probability_threshold": 0.4,
+  "label_boundaries_complexity_scale": [
+    -Infinity,
+    0.24488996806452046,
+    0.3472222222222222,
+    Infinity
+  ],
+  "train_size": 2922,
+  "test_size": 731,
+  "accuracy": 0.6361,
+  "macro_f1": 0.6147,
+  "hard_recall": 0.8649,
+  "sklearn_version": "1.8.0",
+  "training_date": "2026-08-09T06:15:27.494316"
+}
