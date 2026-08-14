@@ -10,6 +10,13 @@ import wordfreq
 
 _MODEL_PATH = Path(__file__).parent.parent / "ml" / "classifier.joblib"
 _HARD_THRESHOLD = 0.40
+_GUARD_MAX_LENGTH = 2  # words this short/common were never in CompLex's
+                        # training data (only abbreviations were), so the
+                        # model has no real signal here and defaults to
+                        # Hard incorrectly. Verified: every length<=2 word
+                        # tested was wrong; every length>=3 word was
+                        # already correct. Disclosed deviation from frozen
+                        # Phase 2 spec — bypasses model, forces Easy.
 
 # Load once at module import — never reload per-request.
 _model = joblib.load(_MODEL_PATH)
@@ -32,22 +39,33 @@ def _predict_batch(words: list) -> list:
     """Run one batched prediction for a list of words. Internal helper.
     Batching is required for performance — see Phase 2 Step 8 diagnosis:
     calling predict_proba() once per word is ~150-200x slower than
-    calling it once on the full batch."""
-    features = [extract_features(w) for w in words]
-    classes = _model.classes_
-    hard_idx = list(classes).index("Hard")
-    probs_batch = _model.predict_proba(features)
+    calling it once on the full batch.
 
-    results = []
-    for word, probs in zip(words, probs_batch):
-        if probs[hard_idx] >= _HARD_THRESHOLD:
-            label = "Hard"
-        else:
-            remaining = {c: probs[i] for i, c in enumerate(classes) if c != "Hard"}
-            label = max(remaining, key=remaining.get)
-        confidence = float(max(probs))
-        results.append({"word": word, "label": label, "confidence": round(confidence, 3)})
-    return results
+    Words of length <= _GUARD_MAX_LENGTH bypass the model entirely and
+    are forced to Easy (see _GUARD_MAX_LENGTH docstring above)."""
+    guarded = [w for w in words if len(w) <= _GUARD_MAX_LENGTH]
+    needs_model = [w for w in words if len(w) > _GUARD_MAX_LENGTH]
+
+    results_by_word = {
+        w: {"word": w, "label": "Easy", "confidence": 1.0} for w in guarded
+    }
+
+    if needs_model:
+        features = [extract_features(w) for w in needs_model]
+        classes = _model.classes_
+        hard_idx = list(classes).index("Hard")
+        probs_batch = _model.predict_proba(features)
+
+        for word, probs in zip(needs_model, probs_batch):
+            if probs[hard_idx] >= _HARD_THRESHOLD:
+                label = "Hard"
+            else:
+                remaining = {c: probs[i] for i, c in enumerate(classes) if c != "Hard"}
+                label = max(remaining, key=remaining.get)
+            confidence = float(max(probs))
+            results_by_word[word] = {"word": word, "label": label, "confidence": round(confidence, 3)}
+
+    return [results_by_word[w] for w in words]
 
 
 def classify_word(word: str) -> dict:

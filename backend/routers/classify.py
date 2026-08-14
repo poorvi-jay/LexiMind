@@ -1,27 +1,32 @@
 """
-backend/routers/classify.py
-POST /classify — rule-based word difficulty classifier.
-Uses wordfreq frequency bands until M3's ML model is ready.
+backend/routers/classify.py — Owner: M3
+POST /classify — real ML word difficulty classifier (F33/F34).
+Replaces M1's wordfreq-threshold placeholder. Delegates all
+inference to classifier_service.py (Phase 2's trained RandomForest,
+loaded once at import — see that file for model details).
 
-Thresholds:
-  frequency > 1e-4  → Easy
-  1e-5 ≤ freq ≤ 1e-4 → Medium
-  frequency < 1e-5   → Hard
+Auth retrofitted to match every other router's convention
+(Depends(get_current_user), same pattern as nlp.py's Day 8 retrofit).
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from wordfreq import word_frequency
 from typing import List
+
+from backend.routers.auth import get_current_user
+from backend.models_temp import User
+from backend.services.classifier_service import classify_words
 
 router = APIRouter(prefix="/classify", tags=["classify"])
 
 
 # ── request / response schemas ──────────────────────────────────────
 class ClassifyRequest(BaseModel):
-    words: List[str] = Field(..., min_length=1, max_length=5000)
+    # min_length removed (was min_length=1) — empty list must return
+    # {"results": []}, not a 422, per Phase 1 audit + Build Guide 4.2.
+    words: List[str] = Field(default_factory=list, max_length=5000)
 
 
 class WordClassification(BaseModel):
@@ -34,32 +39,17 @@ class ClassifyResponse(BaseModel):
     results: List[WordClassification]
 
 
-# ── helper ──────────────────────────────────────────────────────────
-def _classify_word(word: str) -> WordClassification:
-    """Classify a single word using wordfreq frequency bands."""
-    clean = word.strip().lower()
-    if not clean:
-        return WordClassification(word=word, label="Easy", confidence=0.5)
-
-    freq = word_frequency(clean, "en")
-
-    if freq > 1e-4:
-        label, confidence = "Easy", min(1.0, freq * 1_000)
-    elif freq >= 1e-6:
-        label, confidence = "Medium", 0.6
-    else:
-        confidence = 0.85 if freq == 0 else 0.7
-        label = "Hard"
-
-    return WordClassification(word=word, label=label, confidence=round(confidence, 3))
-
-
 # ── endpoint ────────────────────────────────────────────────────────
 @router.post("", response_model=ClassifyResponse)
-async def classify_words(body: ClassifyRequest):
-    """Classify a list of words as Easy / Medium / Hard."""
+async def classify(
+    body: ClassifyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Classify a list of words as Easy / Medium / Hard using the
+    trained model. Contract is frozen — {results: [{word, label,
+    confidence}]} — do not change, per M1→M2 and M2→M3 handoffs."""
     try:
-        results = [_classify_word(w) for w in body.words]
+        results = classify_words(body.words)
         return ClassifyResponse(results=results)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
