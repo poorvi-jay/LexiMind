@@ -38,7 +38,8 @@ app.add_middleware(
 from backend.routers.ocr import router as ocr_router
 from backend.routers.tts import router as tts_router
 from backend.routers.reading import router as reading_router
-from backend.routers.classify import router as classify_router  # import the classify router
+from backend.routers.classify import router as classify_router 
+from backend.routers.sessions import router as sessions_router
 from backend.routers.nlp import router as nlp_router
 from backend.routers.auth import router as auth_router
 from backend.routers.writing import router as writing_router
@@ -50,7 +51,8 @@ app.include_router(writing_router)
 app.include_router(ocr_router, tags=["OCR"])
 app.include_router(tts_router, tags=["TTS"])
 app.include_router(reading_router, tags=["Reading"])
-app.include_router(classify_router, tags=["Classify"])  # include the classify router with a tag
+app.include_router(classify_router, tags=["Classify"])  
+app.include_router(sessions_router, tags=["Sessions"])
 
 
 @app.get("/health")

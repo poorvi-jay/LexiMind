@@ -18,8 +18,7 @@ STATUS: IMPLEMENTED (Task 6) — users table + SQLite connection.
 import os
 import uuid
 import datetime
-
-from sqlalchemy import Column, String, Boolean, Integer, DateTime, create_engine
+from sqlalchemy import Column, String, Boolean, Integer, DateTime, Float, Date, UniqueConstraint, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -67,7 +66,50 @@ class WritingSession(Base):
     grammar_error_count = Column(Integer, default=0)
     homophone_flag_count = Column(Integer, default=0)
     template_used = Column(String(50), nullable=True)
-    
+
+
+class ReadingSession(Base):
+    __tablename__ = "reading_sessions"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
+    date = Column(DateTime, default=datetime.datetime.utcnow)
+    wpm = Column(Float)
+    total_words = Column(Integer)
+    hard_word_count = Column(Integer)
+    repeat_count = Column(Integer)
+    duration_seconds = Column(Integer)
+    source_type = Column(String(10))  # 'image' | 'pdf' | 'paste'
+    simplified = Column(Boolean)
+    complexity_score = Column(Float)
+
+class WordRepeatLog(Base):
+    __tablename__ = "word_repeat_log"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
+    word = Column(String(100))
+    repeat_count = Column(Integer, default=0)
+    difficulty_label = Column(String(10))
+    last_seen = Column(DateTime, default=datetime.datetime.utcnow)
+
+class WordBank(Base):
+    __tablename__ = "word_bank"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
+    word = Column(String(100))
+    difficulty_label = Column(String(10))
+    sm2_ef = Column(Float, default=2.5)
+    sm2_interval = Column(Integer, default=1)
+    sm2_repetitions = Column(Integer, default=0)
+    next_review = Column(Date)
+    total_drills = Column(Integer, default=0)
+    last_quality = Column(Integer)
+    added_at = Column(DateTime, default=datetime.datetime.utcnow)
+    __table_args__ = (UniqueConstraint('user_id', 'word', name='uq_wordbank_user_word'),)
+
+
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _DB_PATH = os.path.join(_BASE_DIR, "dev.db")
 

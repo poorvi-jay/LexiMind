@@ -88,6 +88,11 @@ export default function WritingPage() {
     contentRef.current = content
   }, [content])
 
+  const resultsRef = useRef(results)
+  useEffect(() => {
+    resultsRef.current = results
+  }, [results])
+
   useEffect(() => {
     if (showDocs && isAuthenticated) loadDocuments()
   }, [showDocs, isAuthenticated])
@@ -129,6 +134,28 @@ export default function WritingPage() {
 
     const interval = setInterval(() => saveWithRetry(), 30000)
     return () => clearInterval(interval)
+  }, [isAuthenticated])
+
+  // ── Log writing session on tab-close/hide (F38, Task 4.8) ──
+  useEffect(() => {
+    if (!isAuthenticated) return
+
+    function handleVisibilityChange() {
+      if (document.visibilityState !== 'hidden') return
+      const wordCount = contentRef.current.trim().split(/\s+/).filter(Boolean).length
+      if (wordCount === 0) return
+
+      const r = resultsRef.current
+      api.post('/sessions/writing', {
+        word_count: wordCount,
+        spell_error_count: r.spelling.length,
+        grammar_error_count: r.grammar.length,
+        homophone_flag_count: r.homophones.length,
+      }).catch(err => console.error('Could not log writing session:', err))
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [isAuthenticated])
 
   // ── /nlp/check (unchanged from Task 12) ──

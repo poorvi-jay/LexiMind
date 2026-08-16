@@ -37,6 +37,9 @@ export default function ReadingPage() {
   const [distractionFree, setDistraction] = useState(false)
   const [classificationReady, setClassificationReady] = useState(false)
 
+  const [sourceType, setSourceType] = useState('paste')
+  const sessionStartRef = useRef(null)
+
   // Store the raw word_timings so we can use backend's word list
   const [wordTimings, setWordTimings]     = useState([])
   const classifyRequestRef = useRef(0)
@@ -136,6 +139,7 @@ export default function ReadingPage() {
   }
 
   /* ── File upload ── */
+  /* ── File upload ── */
   async function handleFileUpload(event) {
     const file = event.target.files[0]
     if (!file) return
@@ -153,6 +157,7 @@ export default function ReadingPage() {
       const formData = new FormData()
       formData.append('file', file)
       const endpoint = file.type === 'application/pdf' ? '/ocr/pdf' : '/ocr/image'
+      setSourceType(file.type === 'application/pdf' ? 'pdf' : 'image')
       const data = await api.postForm(endpoint, formData)
       loadText(data.text)
       showToast(`Extracted ${data.word_count} words.`, 'success')
@@ -197,6 +202,7 @@ export default function ReadingPage() {
 
   /* ── Play — also capture word_timings for display sync ── */
   async function handlePlay() {
+    if (!sessionStartRef.current) sessionStartRef.current = Date.now()
     const trimmed = text.trim()
     const cached = getCached(trimmed, speed, prefs.phrasePauses)
 
@@ -248,11 +254,33 @@ export default function ReadingPage() {
   }
 
   function handleStop() {
+    if (sessionStartRef.current) {
+      const elapsedSeconds = Math.round((Date.now() - sessionStartRef.current) / 1000)
+      if (elapsedSeconds >= 30 && showWords.length > 0) {
+        const wordPayload = showWords.map(w => {
+          const clean = normalizeWord(w)
+          return { word: clean, label: classifiedWords[clean] || 'Easy' }
+        })
+        const hardCount = wordPayload.filter(w => w.label === 'Hard').length
+        const wpm = Math.round(showWords.length / (elapsedSeconds / 60))
+
+        api.post('/sessions/reading', {
+          wpm,
+          total_words: showWords.length,
+          hard_word_count: hardCount,
+          duration_seconds: elapsedSeconds,
+          source_type: sourceType,
+          simplified: Boolean(simplified),
+          complexity_score: complexity?.hard_word_pct ?? null,
+          words: wordPayload,
+        }).catch(err => console.error('Could not log reading session:', err))
+      }
+      sessionStartRef.current = null
+    }
     stop()
     setWordTimings([])
     setActiveIndex(-1)
   }
-
   async function handleSpeedChange(nextSpeed) {
     setSpeed(nextSpeed)
 
@@ -392,7 +420,7 @@ export default function ReadingPage() {
                               dark:border-gray-700 dark:bg-[#333]"
                   placeholder="Or paste your text here…"
                   value={text}
-                  onChange={e => loadText(e.target.value)}
+                  onChange={e => { setSourceType('paste'); loadText(e.target.value) }}
                   aria-label="Paste your reading text"
                 />
               </div>
@@ -445,7 +473,7 @@ export default function ReadingPage() {
                                 focus:border-blue-400 focus:outline-none
                                 dark:border-gray-700"
                     value={text}
-                    onChange={e => loadText(e.target.value)}
+                    onChange={e => { setSourceType('paste'); loadText(e.target.value) }}
                   />
 
                   <div className="mt-3 flex flex-wrap gap-2">
