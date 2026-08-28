@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001'
+import { BASE_URL } from '../utils/api'
 const DEFAULT_VOICE = 'en-US-AriaNeural'
 
 /**
