@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from backend.routers.auth import get_current_user
-from backend.models_temp import User, get_db, ReadingSession, WritingSession, WordRepeatLog
+from backend.models_temp import User, get_db, ReadingSession, WritingSession, WordRepeatLog, WordBank
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -69,6 +69,7 @@ def _upsert_word_repeat_log(db: Session, user_id: str, words: List[dict]):
             existing.repeat_count += 1
             existing.difficulty_label = label
             existing.last_seen = datetime.datetime.utcnow()
+            new_count = existing.repeat_count
         else:
             db.add(WordRepeatLog(
                 user_id=user_id,
@@ -77,6 +78,37 @@ def _upsert_word_repeat_log(db: Session, user_id: str, words: List[dict]):
                 difficulty_label=label,
                 last_seen=datetime.datetime.utcnow(),
             ))
+            new_count = 1
+
+        _maybe_add_to_word_bank(db, user_id, word, label, new_count)
+
+def _maybe_add_to_word_bank(db: Session, user_id: str, word: str, label: str, repeat_count: int):
+    """F49: once a word's repeat_count crosses 3, add it to word_bank
+    with default SM-2 state, if it isn't already there. Find-or-skip,
+    not a blind insert — word_bank has a unique (user_id, word)
+    constraint."""
+    if repeat_count < 3:
+        return
+
+    already_in_bank = (
+        db.query(WordBank)
+        .filter(WordBank.user_id == user_id, WordBank.word == word)
+        .first()
+    )
+    if already_in_bank:
+        return
+
+    db.add(WordBank(
+        user_id=user_id,
+        word=word,
+        difficulty_label=label,
+        sm2_ef=2.5,
+        sm2_interval=1,
+        sm2_repetitions=0,
+        next_review=datetime.date.today(),
+        total_drills=0,
+    ))
+
 
 
 @router.post("/reading")
