@@ -1,17 +1,20 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useWordBankStats } from '../hooks/useWordBankStats'
 
 const links = [
   { to: '/', label: 'Home' },
   { to: '/reading', label: 'Reading' },
   { to: '/writing', label: 'Writing' },
-  { to: '/analytics', label: 'Analytics'},
+  { to: '/analytics', label: 'Analytics' },
+  { to: '/wordbank/drill', label: 'Word Bank', showDueBadge: true },
   { to: '/settings', label: 'Settings' },
 ]
 
 export default function NavBar() {
   const { pathname } = useLocation()
   const { isAuthenticated, user, logout } = useAuth()
+  const { dueCount } = useWordBankStats()
 
   return (
     <nav
@@ -73,6 +76,15 @@ export default function NavBar() {
                   }`}
               >
                 {link.label}
+                {link.showDueBadge && dueCount > 0 && (
+                  <span
+                    className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center
+                               rounded-full bg-red-500 px-1.5 py-0.5 text-xs font-bold text-white"
+                    aria-label={`${dueCount} words due for review`}
+                  >
+                    {dueCount}
+                  </span>
+                )}
               </Link>
             )
           })}

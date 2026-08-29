@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useWordBankStats } from '../hooks/useWordBankStats'
 
 /* ─── Feature cards (user-facing language, not technical) ─── */
 const FEATURES = [
@@ -63,6 +64,7 @@ export default function HomePage() {
   const { user } = useAuth()
   const location = useLocation()
   const [showWelcome, setShowWelcome] = useState(!!location.state?.justLoggedIn)
+  const { dueCount } = useWordBankStats()
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-[#1E1E1E] sm:px-6">
       {showWelcome && (
@@ -81,6 +83,25 @@ export default function HomePage() {
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {dueCount > 0 && (
+        <div
+          className="mx-auto mb-6 flex max-w-6xl flex-wrap items-center justify-between gap-3
+                     rounded-2xl bg-amber-50 px-5 py-3 dark:bg-amber-950/30"
+        >
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            🔎 {dueCount} word{dueCount === 1 ? '' : 's'} ready to review in your Word Bank.
+          </p>
+          <Link
+            to="/wordbank/drill"
+            className="rounded-2xl bg-amber-600 px-4 py-1.5 text-sm font-semibold text-white
+                       hover:bg-amber-700 focus-visible:outline-2 focus-visible:outline-offset-2
+                       focus-visible:outline-amber-500"
+          >
+            Review now
+          </Link>
         </div>
       )}
 
