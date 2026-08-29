@@ -12,8 +12,20 @@ const RATINGS = [
   { quality: 5, label: 'Instantly knew it', color: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300' },
 ]
 
-function playWord(word) {
-  api.post('/tts/word', { word }).catch(err => console.error('Could not play word:', err))
+async function playWord(word) {
+  try {
+    const data = await api.post('/tts/word', { word, voice: 'en-GB-SoniaNeural' })
+    const binary = atob(data.audio_b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    const blob = new Blob([bytes], { type: 'audio/mpeg' })
+    const audio = new Audio()
+    audio.src = URL.createObjectURL(blob)
+    audio.onended = () => URL.revokeObjectURL(audio.src)
+    audio.play()
+  } catch (err) {
+    console.error('Could not play word:', err)
+  }
 }
 
 export default function WordBankDrillPage() {
