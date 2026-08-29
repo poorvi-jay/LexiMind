@@ -6,6 +6,7 @@ import ReadingPage from './pages/ReadingPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
 import WritingPage from './pages/WritingPage.jsx'
 import AnalyticsPage from './pages/AnalyticsPage.jsx'
+import WordBankDrillPage from './pages/WordBankDrillPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/writing" element={<WritingPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/wordbank/drill" element={<WordBankDrillPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
