@@ -99,3 +99,28 @@ async def submit_drill_result(
         "total_drills": entry.total_drills,
         "mastered": result["mastered"],
     }
+
+@router.get("/stats")
+async def get_wordbank_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """F51: counts used to power the NavBar badge and HomePage
+    drill-due reminder card."""
+    due_count = (
+        db.query(WordBank)
+        .filter(
+            WordBank.user_id == current_user.id,
+            WordBank.next_review <= datetime.date.today(),
+        )
+        .count()
+    )
+    total_words = (
+        db.query(WordBank)
+        .filter(WordBank.user_id == current_user.id)
+        .count()
+    )
+    return {
+        "due_count": due_count,
+        "total_words": total_words,
+    }
