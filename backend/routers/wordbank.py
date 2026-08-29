@@ -124,3 +124,26 @@ async def get_wordbank_stats(
         "due_count": due_count,
         "total_words": total_words,
     }
+
+@router.get("/syllables")
+async def get_word_syllables(
+    word: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Splits a word into syllables using the same NLTK
+    SyllableTokenizer already used by the difficulty classifier
+    (classifier_service.py), so the drill's syllable breakdown stays
+    consistent with the rest of the ML pipeline rather than
+    duplicating a second, possibly inconsistent implementation."""
+    from backend.services.classifier_service import _syllable_tokenizer
+
+    clean_word = word.strip().lower()
+    if not clean_word:
+        raise HTTPException(status_code=422, detail="word is required")
+
+    try:
+        syllables = _syllable_tokenizer.tokenize(clean_word)
+    except Exception:
+        syllables = [clean_word]
+
+    return {"word": clean_word, "syllables": syllables}
