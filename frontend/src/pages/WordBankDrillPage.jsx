@@ -12,20 +12,27 @@ const RATINGS = [
   { quality: 5, label: 'Instantly knew it', color: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300' },
 ]
 
-async function playWord(word) {
-  try {
-    const data = await api.post('/tts/word', { word, voice: 'en-GB-SoniaNeural' })
-    const binary = atob(data.audio_b64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-    const blob = new Blob([bytes], { type: 'audio/mpeg' })
+// Fetches one syllable's audio and returns a ready-to-play blob URL,
+// without playing it yet. Called for every syllable in parallel up
+// front, so there's zero network wait once playback actually starts.
+async function fetchClipUrl(text) {
+  const data = await api.post('/tts/word', { word: text, voice: 'en-GB-SoniaNeural' })
+  const binary = atob(data.audio_b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const blob = new Blob([bytes], { type: 'audio/mpeg' })
+  return URL.createObjectURL(blob)
+}
+
+// Plays an already-prepared blob URL, resolving once it finishes.
+function playClipUrl(url) {
+  return new Promise((resolve, reject) => {
     const audio = new Audio()
-    audio.src = URL.createObjectURL(blob)
-    audio.onended = () => URL.revokeObjectURL(audio.src)
-    audio.play()
-  } catch (err) {
-    console.error('Could not play word:', err)
-  }
+    audio.src = url
+    audio.onended = resolve
+    audio.onerror = () => reject(new Error('Audio playback failed'))
+    audio.play().catch(reject)
+  })
 }
 
 export default function WordBankDrillPage() {
@@ -37,6 +44,11 @@ export default function WordBankDrillPage() {
   const [submitting, setSubmitting] = useState(false)
   const [loadError, setLoadError] = useState(null)
   const [completedCount, setCompletedCount] = useState(0)
+
+  const [syllables, setSyllables] = useState(null) // null while loading for the current word
+  const [clipUrls, setClipUrls] = useState(null) // prefetched audio blob URLs, same order as syllables
+  const [playingIndex, setPlayingIndex] = useState(-1) // -1 = nothing playing
+  const isPlaying = playingIndex !== -1
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -50,6 +62,48 @@ export default function WordBankDrillPage() {
   }, [isAuthenticated])
 
   const currentWord = words?.[index]
+
+  // Fetch the syllable breakdown fresh each time the active word changes.
+  useEffect(() => {
+    if (!currentWord) return
+    let cancelled = false
+
+    api.get(`/wordbank/syllables?word=${encodeURIComponent(currentWord.word)}`)
+      .then(data => { if (!cancelled) setSyllables(data.syllables) })
+      .catch(() => { if (!cancelled) setSyllables([currentWord.word]) }) // fall back to whole word
+
+    return () => { cancelled = true; setSyllables(null) }
+  }, [currentWord])
+
+  // As soon as syllables arrive, prefetch every clip in parallel so
+  // there's no per-syllable network wait once the user hits play.
+  useEffect(() => {
+    if (!syllables?.length) return
+    let cancelled = false
+
+    Promise.all(syllables.map(fetchClipUrl))
+      .then(urls => { if (!cancelled) setClipUrls(urls) })
+      .catch(() => { if (!cancelled) setClipUrls(null) })
+
+    return () => { cancelled = true; setClipUrls(null) }
+  }, [syllables])
+
+  // Plays each pre-fetched clip in order, highlighting the active
+  // syllable. Guarded by isPlaying so a rapid double-click can't
+  // overlap two playback sequences at once.
+  async function handleSpeakerClick() {
+    if (isPlaying || !clipUrls?.length) return
+    for (let i = 0; i < clipUrls.length; i++) {
+      setPlayingIndex(i)
+      try {
+        await playClipUrl(clipUrls[i])
+      } catch {
+        break
+      }
+    }
+    setPlayingIndex(-1)
+  }
+
   const isFinished = words && index >= words.length
 
   async function handleRate(quality) {
@@ -60,6 +114,7 @@ export default function WordBankDrillPage() {
       setCompletedCount(c => c + 1)
       setIndex(i => i + 1)
       setRevealed(false)
+      setPlayingIndex(-1)
     } catch {
       setLoadError('Could not save that answer. Your progress on this word was not recorded.')
     } finally {
@@ -179,18 +234,37 @@ export default function WordBankDrillPage() {
             Do you remember what this word means?
           </p>
 
+          {/* Word broken into syllables, highlighted one at a time as
+              its audio plays. Not itself clickable — the speaker icon
+              below is the only way to trigger playback, so a click
+              on the word never accidentally starts (or restarts)
+              audio. */}
+          <div className="mb-3 flex flex-wrap items-center justify-center gap-1">
+            {(syllables ?? [currentWord.word]).map((syl, i) => (
+              <span
+                key={`${currentWord.word}-${i}`}
+                className={`text-4xl font-bold tracking-tight transition-colors duration-150
+                  ${playingIndex === i
+                    ? 'rounded-lg bg-amber-200 text-gray-950 dark:bg-amber-500/40 dark:text-white'
+                    : 'text-gray-950 dark:text-white'}`}
+              >
+                {syl}
+              </span>
+            ))}
+          </div>
+
           <button
             type="button"
-            onClick={() => { playWord(currentWord.word); setRevealed(true) }}
-            className="mx-auto flex flex-col items-center gap-3 rounded-2xl px-6 py-4
+            onClick={handleSpeakerClick}
+            disabled={isPlaying || !clipUrls}
+            aria-label={isPlaying ? 'Playing sound' : 'Hear this word, syllable by syllable'}
+            className="mx-auto flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium
+                       text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60
+                       dark:text-blue-300 dark:hover:bg-blue-950/30
                        focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
           >
-            <span className="text-4xl font-bold tracking-tight text-gray-950 dark:text-white">
-              {currentWord.word}
-            </span>
-            <span className="flex items-center gap-1 text-sm font-medium text-blue-600 dark:text-blue-300">
-              🔊 Tap to hear it
-            </span>
+            <span aria-hidden="true">{isPlaying ? '🔈' : '🔊'}</span>
+            {isPlaying ? 'Playing…' : 'Tap to hear it, syllable by syllable'}
           </button>
 
           {!revealed ? (
