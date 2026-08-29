@@ -41,6 +41,7 @@ from backend.routers.reading import router as reading_router
 from backend.routers.classify import router as classify_router 
 from backend.routers.sessions import router as sessions_router
 from backend.routers.analytics import router as analytics_router
+from backend.routers.wordbank import router as wordbank_router
 from backend.routers.nlp import router as nlp_router
 from backend.routers.auth import router as auth_router
 from backend.routers.writing import router as writing_router
@@ -55,6 +56,9 @@ app.include_router(reading_router, tags=["Reading"])
 app.include_router(classify_router, tags=["Classify"])  
 app.include_router(sessions_router, tags=["Sessions"])
 app.include_router(analytics_router, tags=["Analytics"])
+app.include_router(wordbank_router, tags=["Word Bank"])
+
+
 
 
 @app.get("/health")
