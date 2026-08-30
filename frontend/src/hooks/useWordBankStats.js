@@ -3,16 +3,17 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../utils/api'
 
 /**
- * F51: fetches /wordbank/stats on mount (and on window focus, so the
- * badge stays accurate if a drill was completed in another tab).
- * Returns { dueCount, totalWords, isLoading }. Silently no-ops when
- * signed out or on fetch failure — a stale/missing badge is a minor
- * cosmetic issue, not worth surfacing as an app-wide error.
+ * F51: fetches /wordbank/stats and the first few due words on mount
+ * (and on window focus, so the badge/card stay accurate if a drill
+ * was completed in another tab). Silently no-ops when signed out or
+ * on fetch failure — a stale/missing badge is a minor cosmetic issue,
+ * not worth surfacing as an app-wide error.
  */
 export function useWordBankStats() {
   const { isAuthenticated } = useAuth()
   const [dueCount, setDueCount] = useState(0)
   const [totalWords, setTotalWords] = useState(0)
+  const [dueWords, setDueWords] = useState([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -23,23 +24,26 @@ export function useWordBankStats() {
     let cancelled = false
 
     function load() {
-      api.get('/wordbank/stats')
-        .then(data => {
+      Promise.all([api.get('/wordbank/stats'), api.get('/wordbank/drill')])
+        .then(([stats, drillWords]) => {
           if (cancelled) return
-          setDueCount(data.due_count ?? 0)
-          setTotalWords(data.total_words ?? 0)
+          setDueCount(stats.due_count ?? 0)
+          setTotalWords(stats.total_words ?? 0)
+          setDueWords((drillWords ?? []).slice(0, 5))
         })
-        .catch(() => { /* badge just stays at last-known value */ })
+        .catch(() => { /* badge/card just stay at last-known values */ })
         .finally(() => { if (!cancelled) setIsLoading(false) })
     }
 
     load()
     window.addEventListener('focus', load)
+    window.addEventListener('wordbank-updated', load)
     return () => {
       cancelled = true
       window.removeEventListener('focus', load)
+      window.removeEventListener('wordbank-updated', load)
     }
   }, [isAuthenticated])
 
-  return { dueCount, totalWords, isLoading: isAuthenticated ? isLoading : false }
+  return { dueCount, totalWords, dueWords, isLoading: isAuthenticated ? isLoading : false }
 }

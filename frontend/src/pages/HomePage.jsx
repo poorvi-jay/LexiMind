@@ -64,7 +64,7 @@ export default function HomePage() {
   const { user } = useAuth()
   const location = useLocation()
   const [showWelcome, setShowWelcome] = useState(!!location.state?.justLoggedIn)
-  const { dueCount } = useWordBankStats()
+  const { dueCount, dueWords } = useWordBankStats()
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-[#1E1E1E] sm:px-6">
       {showWelcome && (
@@ -87,21 +87,38 @@ export default function HomePage() {
       )}
 
       {dueCount > 0 && (
-        <div
-          className="mx-auto mb-6 flex max-w-6xl flex-wrap items-center justify-between gap-3
-                     rounded-2xl bg-amber-50 px-5 py-3 dark:bg-amber-950/30"
-        >
-          <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-            🔎 {dueCount} word{dueCount === 1 ? '' : 's'} ready to review in your Word Bank.
-          </p>
-          <Link
-            to="/wordbank/drill"
-            className="rounded-2xl bg-amber-600 px-4 py-1.5 text-sm font-semibold text-white
-                       hover:bg-amber-700 focus-visible:outline-2 focus-visible:outline-offset-2
-                       focus-visible:outline-amber-500"
-          >
-            Review now
-          </Link>
+        <div className="mx-auto mb-6 max-w-6xl rounded-2xl bg-amber-50 px-5 py-4 dark:bg-amber-950/30">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              🔎 {dueCount} word{dueCount === 1 ? '' : 's'} ready to review in your Word Bank.
+            </p>
+            <Link
+              to="/wordbank/drill"
+              className="rounded-2xl bg-amber-600 px-4 py-1.5 text-sm font-semibold text-white
+                         hover:bg-amber-700 focus-visible:outline-2 focus-visible:outline-offset-2
+                         focus-visible:outline-amber-500"
+            >
+              Start drill
+            </Link>
+          </div>
+          {dueWords.length > 0 && (
+            <ul className="flex flex-wrap items-center gap-2">
+              {dueWords.map(w => (
+                <li
+                  key={w.word}
+                  className="rounded-full bg-white px-3 py-1 text-sm font-medium text-amber-900
+                             dark:bg-amber-900/40 dark:text-amber-100"
+                >
+                  {w.word}
+                </li>
+              ))}
+              {dueCount > dueWords.length && (
+                <li className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                  +{dueCount - dueWords.length} more
+                </li>
+              )}
+            </ul>
+          )}
         </div>
       )}
 

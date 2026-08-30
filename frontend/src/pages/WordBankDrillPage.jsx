@@ -111,6 +111,7 @@ export default function WordBankDrillPage() {
     setSubmitting(true)
     try {
       await api.post('/wordbank/drill/result', { word: currentWord.word, quality })
+      window.dispatchEvent(new Event('wordbank-updated'))
       setCompletedCount(c => c + 1)
       setIndex(i => i + 1)
       setRevealed(false)
@@ -120,6 +121,29 @@ export default function WordBankDrillPage() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  // ── Not logged in ──
+  if (!isAuthenticated) {
+    return (
+      <main className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-[#1E1E1E] sm:px-6">
+        <div className="mx-auto flex max-w-2xl flex-col items-center gap-4 rounded-2xl
+                         bg-white px-6 py-16 text-center shadow-sm dark:bg-[#2A2A2A]">
+          <span className="text-3xl" aria-hidden="true">🔒</span>
+          <h1 className="text-xl font-bold text-gray-950 dark:text-white">
+            Please log in to review your words
+          </h1>
+          <a
+            href="/login"
+            className="mt-2 rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white
+                       hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2
+                       focus-visible:outline-blue-500"
+          >
+            Go to login
+          </a>
+        </div>
+      </main>
+    )
   }
 
   // ── Loading ──
