@@ -10,8 +10,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from backend.routers.auth import get_current_user
 from backend.models_temp import User, get_db, ReadingSession, WritingSession, WordRepeatLog
-router = APIRouter(prefix="/analytics", tags=["analytics"])
 
+router = APIRouter(prefix="/analytics")
 
 @router.get("/summary")
 async def get_summary(

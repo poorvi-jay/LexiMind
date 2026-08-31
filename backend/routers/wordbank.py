@@ -20,7 +20,7 @@ from backend.routers.auth import get_current_user
 from backend.models_temp import User, get_db, WordBank
 from backend.services.sm2_service import update_sm2
 
-router = APIRouter(prefix="/wordbank", tags=["wordbank"])
+router = APIRouter(prefix="/wordbank")
 
 
 @router.get("/drill")
@@ -147,3 +147,33 @@ async def get_word_syllables(
         syllables = [clean_word]
 
     return {"word": clean_word, "syllables": syllables}
+
+@router.get("")
+async def list_all_words(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """AC-39: every word in the current user's bank, regardless of
+    due date — distinct from /wordbank/drill, which only returns
+    words due today. Ordered by next_review ascending, so the
+    soonest-due words appear first."""
+    words = (
+        db.query(WordBank)
+        .filter(WordBank.user_id == current_user.id)
+        .order_by(WordBank.next_review.asc())
+        .all()
+    )
+    return [
+        {
+            "word": w.word,
+            "difficulty_label": w.difficulty_label,
+            "sm2_ef": w.sm2_ef,
+            "sm2_interval": w.sm2_interval,
+            "sm2_repetitions": w.sm2_repetitions,
+            "next_review": w.next_review.isoformat() if w.next_review else None,
+            "total_drills": w.total_drills,
+            "added_at": w.added_at.isoformat() if w.added_at else None,
+            "mastered": (w.sm2_ef >= 2.5 and w.sm2_interval >= 21),
+        }
+        for w in words
+    ]
