@@ -1,75 +1,42 @@
-import { useEffect, useState } from 'react'
-import {
-  LineChart, Line, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts'
+import { useEffect, useMemo, useState } from 'react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../utils/api'
 
-// ── Design tokens shared with the rest of the app ──
-// Soft amber/blue, never harsh red — matches the same choice already
-// made for hard-word highlighting on the Reading page.
-const COLORS = {
-  wpm: '#2563eb',       // blue-600, matches primary CTA colour
-  errorRate: '#F59E0B', // amber-500 — mirrors --leximind-highlight-hard
-  difficult: '#FBBF24', // same amber used for hard-word tokens
-  grid: '#E5E7EB',
+const READING_COLOR = '#2563eb'
+
+/* ── Count-up hook: numbers arrive by counting from 0, once, on load ── */
+function useCountUp(target, durationMs = 700) {
+  const [value, setValue] = useState(0)
+  useEffect(() => {
+    const prefersReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const effectiveDuration = prefersReduced ? 0 : durationMs
+
+    let start
+    let frame
+    function tick(ts) {
+      if (start === undefined) start = ts
+      const progress = effectiveDuration === 0 ? 1 : Math.min((ts - start) / effectiveDuration, 1)
+      setValue(Math.round(progress * (target || 0)))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [target, durationMs])
+  return value
 }
 
-const CHART_TICK = { fontSize: 14, fill: '#4B5563' }
-
-// F41: click a difficult-word bar to hear it read aloud.
-// Reuses M1's existing POST /tts/word — no second TTS integration.
-function playWord(word) {
-  api.post('/tts/word', { word }).catch(err => console.error('Could not play word:', err))
-}
-
-/* ── Big-number summary card, matches HomePage's benefit-card style ── */
-function StatCard({ icon, label, value }) {
+/* ── Card wrapper: same rounded/shadow language throughout the app ── */
+function Card({ icon, title, children, className = '' }) {
   return (
-    <div
-      className="flex items-center gap-4 rounded-2xl border border-gray-100 bg-white p-5
-                 shadow-sm dark:border-gray-700 dark:bg-[#2A2A2A]"
-    >
-      <span
-        className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-blue-50
-                   text-2xl dark:bg-blue-950/40"
-        aria-hidden="true"
-      >
-        {icon}
-      </span>
-      <div>
-        <p className="text-2xl font-bold tracking-tight text-gray-950 dark:text-white">
-          {value}
-        </p>
-        <p className="text-sm text-gray-600 dark:text-gray-300">{label}</p>
-      </div>
-    </div>
-  )
-}
-
-/* ── Section wrapper: consistent card, heading, and icon for every chart ── */
-function Section({ icon, title, subtitle, children }) {
-  return (
-    <section
-      className="mt-6 rounded-2xl border border-gray-100 bg-white p-6 shadow-sm
-                 dark:border-gray-700 dark:bg-[#2A2A2A]"
-      aria-labelledby={`${title.replace(/\s+/g, '-').toLowerCase()}-heading`}
-    >
-      <div className="mb-4 flex items-start gap-3">
-        <span className="text-2xl" aria-hidden="true">{icon}</span>
-        <div>
-          <h2
-            id={`${title.replace(/\s+/g, '-').toLowerCase()}-heading`}
-            className="text-lg font-bold text-gray-950 dark:text-white"
-          >
-            {title}
-          </h2>
-          {subtitle && (
-            <p className="text-sm text-gray-600 dark:text-gray-300">{subtitle}</p>
-          )}
+    <section className={`rounded-2xl border border-gray-100 bg-white p-6 shadow-sm
+                          dark:border-gray-700 dark:bg-[#2A2A2A] ${className}`}>
+      {title && (
+        <div className="mb-4 flex items-center gap-3">
+          <span className="text-2xl" aria-hidden="true">{icon}</span>
+          <h2 className="text-lg font-bold text-gray-950 dark:text-white">{title}</h2>
         </div>
-      </div>
+      )}
       {children}
     </section>
   )
@@ -78,16 +45,14 @@ function Section({ icon, title, subtitle, children }) {
 /* ── Friendly empty state: an invitation to act, not a bare error line ── */
 function EmptyState({ icon, message, actionLabel, actionTo }) {
   return (
-    <div
-      className="flex flex-col items-center gap-3 rounded-2xl bg-gray-50 px-6 py-10
-                 text-center dark:bg-[#333]"
-    >
-      <span className="text-3xl" aria-hidden="true">{icon}</span>
+    <div className="flex flex-col items-center gap-3 rounded-2xl bg-gray-50 px-6 py-16
+                     text-center dark:bg-[#333]">
+      <span className="text-4xl" aria-hidden="true">{icon}</span>
       <p className="max-w-sm text-base text-gray-600 dark:text-gray-300">{message}</p>
       {actionLabel && actionTo && (
         <a
           href={actionTo}
-          className="mt-1 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white
+          className="mt-1 rounded-2xl bg-blue-600 px-5 py-2.5 text-base font-semibold text-white
                      hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2
                      focus-visible:outline-blue-500"
         >
@@ -98,24 +63,155 @@ function EmptyState({ icon, message, actionLabel, actionTo }) {
   )
 }
 
-/* ── Tooltip cards styled to match the rest of the app, not Recharts defaults ── */
-function ChartTooltip({ active, payload, label, formatter }) {
-  if (!active || !payload?.length) return null
+/* ── A single stat tile for the side rail ── */
+function StatTile({ icon, label, value }) {
   return (
-    <div
-      className="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-lg
-                 dark:border-gray-700 dark:bg-[#2A2A2A]"
-    >
-      <p className="text-sm font-semibold text-gray-950 dark:text-white">{label}</p>
-      <p className="text-sm text-gray-600 dark:text-gray-300">
-        {formatter ? formatter(payload[0].value) : payload[0].value}
-      </p>
+    <div className="rounded-2xl bg-gray-50 px-5 py-4 text-center dark:bg-[#333]">
+      <span className="text-2xl" aria-hidden="true">{icon}</span>
+      <p className="mt-1 text-2xl font-bold text-gray-950 dark:text-white">{value}</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
     </div>
   )
 }
 
+/* ── Two big plain bars, side by side: "Last time" vs "Today".
+     No axis, no gridlines, no dates — just two numbers to compare. ── */
+function CompareBars({ beforeLabel, beforeValue, nowLabel, nowValue, unit, color }) {
+  const max = Math.max(beforeValue, nowValue, 1)
+  const beforeHeight = Math.max(12, (beforeValue / max) * 100)
+  const nowHeight = Math.max(12, (nowValue / max) * 100)
+
+  return (
+    <div className="flex items-end justify-center gap-10 px-4 py-6">
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex h-40 w-20 items-end">
+          <div
+            className="w-full rounded-t-xl bg-gray-300 dark:bg-gray-600"
+            style={{ height: `${beforeHeight}%` }}
+          />
+        </div>
+        <p className="text-xl font-bold text-gray-700 dark:text-gray-200">{beforeValue}</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">{beforeLabel}</p>
+      </div>
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex h-40 w-20 items-end">
+          <div
+            className="w-full rounded-t-xl"
+            style={{ height: `${nowHeight}%`, backgroundColor: color }}
+          />
+        </div>
+        <p className="text-xl font-bold text-gray-950 dark:text-white">
+          {nowValue} <span className="text-sm font-normal text-gray-500 dark:text-gray-400">{unit}</span>
+        </p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">{nowLabel}</p>
+      </div>
+    </div>
+  )
+}
+
+/* ── Plain-language verdict, no percentages, no jargon ── */
+function PlainVerdict({ direction, goodText, sameText, firstText, badText }) {
+  if (direction === 'first') {
+    return <p className="text-center text-lg font-medium text-blue-700 dark:text-blue-300">✨ {firstText}</p>
+  }
+  if (direction === 'up') {
+    return <p className="text-center text-lg font-medium text-emerald-700 dark:text-emerald-300">✅ {goodText}</p>
+  }
+  if (direction === 'down') {
+    return <p className="text-center text-lg font-medium text-amber-700 dark:text-amber-300">💪 {badText}</p>
+  }
+  return <p className="text-center text-lg font-medium text-gray-600 dark:text-gray-300">{sameText}</p>
+}
+
+function computeDirection(prev, latest, higherIsBetter) {
+  if (prev == null) return 'first'
+  if (prev === latest) return 'same'
+  const improved = higherIsBetter ? latest > prev : latest < prev
+  return improved ? 'up' : 'down'
+}
+
+/* ── Consecutive-day streak from combined reading + writing session dates ── */
+function computeStreak(readingSessions, writingSessions) {
+  const days = new Set()
+  for (const s of [...readingSessions, ...writingSessions]) {
+    if (s.date) days.add(s.date.slice(0, 10))
+  }
+  if (days.size === 0) return 0
+
+  const sorted = [...days].sort().reverse()
+  let streak = 1
+  let cursor = new Date(sorted[0])
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prevDay = new Date(cursor)
+    prevDay.setDate(prevDay.getDate() - 1)
+    const expected = prevDay.toISOString().slice(0, 10)
+    if (sorted[i] === expected) {
+      streak += 1
+      cursor = prevDay
+    } else {
+      break
+    }
+  }
+  return streak
+}
+
+/* ── "Your biggest win": picks the single most meaningful improvement
+     to date, rather than showing every metric. Returns null when
+     there isn't enough data for a genuine insight — never fabricates
+     one just to fill the space (per brief section 16/30). ── */
+function computeBiggestWin(reading, writing, difficultWords) {
+  if (reading.length >= 2) {
+    const first = reading[reading.length - 1].wpm
+    const best = Math.max(...reading.map(r => r.wpm))
+    const gain = best - first
+    if (gain > 0) {
+      return `You improved your reading speed by ${gain} words per minute since you started.`
+    }
+  }
+  if (writing.length >= 2) {
+    const totals = writing.map(w => (w.spell_error_count ?? 0) + (w.grammar_error_count ?? 0) + (w.homophone_flag_count ?? 0))
+    const first = totals[totals.length - 1]
+    const fewest = Math.min(...totals)
+    const drop = first - fewest
+    if (drop > 0) {
+      return `You've cut your writing mistakes from ${first} down to ${fewest}.`
+    }
+  }
+  if (difficultWords.length >= 3) {
+    return `You've been practicing ${difficultWords.length} tricky words — every one is a step forward.`
+  }
+  return null
+}
+
+/* ── "Progress Coach": one short, human observation drawn from real
+     data, not a generic motivational line. Kept to 1-2 sentences per
+     brief section 17 — this is a nudge, not a report. ── */
+function computeCoachText(readingDirection, writingDirection) {
+  if (readingDirection === 'up' && writingDirection === 'up') {
+    return "You're doing especially well with reading speed, and your writing mistakes have gone down too."
+  }
+  if (readingDirection === 'up') {
+    return "You're doing especially well with reading speed lately."
+  }
+  if (writingDirection === 'up') {
+    return "Your writing accuracy has been improving — keep it up."
+  }
+  return 'A little practice today goes a long way.'
+}
+
+function playWord(word) {
+  api.post('/tts/word', { word }).catch(err => console.error('Could not play word:', err))
+}
+
+const TABS = [
+  { id: 'reading', label: 'Reading', icon: '📖' },
+  { id: 'writing', label: 'Writing', icon: '✍️' },
+  { id: 'words', label: 'Words', icon: '🔎' },
+]
+
 export default function AnalyticsPage() {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
 
   const [summary, setSummary] = useState(null)
   const [reading, setReading] = useState([])
@@ -124,10 +220,10 @@ export default function AnalyticsPage() {
 
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
+  const [activeTab, setActiveTab] = useState('reading')
 
   useEffect(() => {
     if (!isAuthenticated) return
-
     let cancelled = false
 
     async function loadAnalytics() {
@@ -156,30 +252,70 @@ export default function AnalyticsPage() {
     return () => { cancelled = true }
   }, [isAuthenticated])
 
-  // Charts read oldest -> newest left to right; API returns newest-first.
-  const readingChartData = [...reading].reverse().map(s => ({
-    date: s.date ? s.date.slice(0, 10) : '',
-    wpm: s.wpm,
-  }))
+  const readingChartData = useMemo(
+    () => [...reading].reverse().map(s => ({ date: s.date ? s.date.slice(0, 10) : '', wpm: s.wpm })),
+    [reading]
+  )
 
-  const writingChartData = [...writing].reverse().map(s => ({
-    date: s.date ? s.date.slice(0, 10) : '',
-    errorRate: s.error_rate ?? 0,
-  }))
+  const readingDirection = useMemo(() => {
+    if (reading.length < 2) return reading.length === 1 ? 'first' : 'none'
+    return computeDirection(reading[1].wpm, reading[0].wpm, true)
+  }, [reading])
 
-  const difficultWordsChartData = [...difficultWords].reverse() // biggest bar at top
+  const writingDirection = useMemo(() => {
+    if (writing.length < 2) return writing.length === 1 ? 'first' : 'none'
+    return computeDirection(writing[1].error_rate ?? 0, writing[0].error_rate ?? 0, false)
+  }, [writing])
+
+  const streak = useMemo(() => computeStreak(reading, writing), [reading, writing])
+
+  const overallMood = useMemo(() => {
+    if (readingDirection === 'up' || writingDirection === 'up') {
+      return { icon: '🌟', text: "You're doing great! Keep it up." }
+    }
+    if (!summary?.total_sessions) {
+      return { icon: '👋', text: 'Read or write something to get started.' }
+    }
+    return { icon: '💪', text: 'Keep practicing — you can do this!' }
+  }, [readingDirection, writingDirection, summary])
+
+  const biggestWin = useMemo(
+    () => computeBiggestWin(reading, writing, difficultWords),
+    [reading, writing, difficultWords]
+  )
+  const coachText = useMemo(
+    () => computeCoachText(readingDirection, writingDirection),
+    [readingDirection, writingDirection]
+  )
+  const [simpleView, setSimpleView] = useState(false)
+
+  const totalSessionsAnim = useCountUp(summary?.total_sessions ?? 0)
+  const totalWordsAnim = useCountUp(summary?.total_words ?? 0)
+  const bestWpmAnim = useCountUp(summary?.best_wpm ?? 0)
+  const avgWpmAnim = useCountUp(summary?.avg_wpm ?? 0)
+
+  const totalWritingSessions = writing.length
+  const avgMistakes = useMemo(() => {
+    if (writing.length === 0) return 0
+    const totals = writing.map(w => (w.spell_error_count ?? 0) + (w.grammar_error_count ?? 0) + (w.homophone_flag_count ?? 0))
+    return Math.round((totals.reduce((a, b) => a + b, 0) / totals.length) * 10) / 10
+  }, [writing])
+  const bestMistakes = useMemo(() => {
+    if (writing.length === 0) return 0
+    return Math.min(...writing.map(w => (w.spell_error_count ?? 0) + (w.grammar_error_count ?? 0) + (w.homophone_flag_count ?? 0)))
+  }, [writing])
 
   if (isLoading) {
     return (
       <main className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-[#1E1E1E] sm:px-6">
-        <div className="mx-auto flex max-w-4xl flex-col items-center gap-4 py-20 text-center">
+        <div className="mx-auto flex max-w-3xl flex-col items-center gap-4 py-20 text-center">
           <span
             className="h-10 w-10 animate-spin rounded-full border-4 border-blue-200
                        border-t-blue-600 dark:border-gray-700 dark:border-t-blue-400"
             role="status"
             aria-label="Loading"
           />
-          <p className="text-lg text-gray-600 dark:text-gray-300">Loading your analytics…</p>
+          <p className="text-lg text-gray-600 dark:text-gray-300">Getting your progress ready…</p>
         </div>
       </main>
     )
@@ -188,145 +324,306 @@ export default function AnalyticsPage() {
   if (loadError) {
     return (
       <main className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-[#1E1E1E] sm:px-6">
-        <div
-          className="mx-auto flex max-w-4xl flex-col items-center gap-3 rounded-2xl
-                     border border-amber-200 bg-amber-50 px-6 py-10 text-center
-                     dark:border-amber-900 dark:bg-amber-950/30"
-        >
+        <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 rounded-2xl
+                         border border-amber-200 bg-amber-50 px-6 py-10 text-center
+                         dark:border-amber-900 dark:bg-amber-950/30">
           <span className="text-3xl" aria-hidden="true">⚠️</span>
           <p className="text-lg font-semibold text-gray-950 dark:text-white">
-            We couldn&apos;t load your analytics
+            We couldn&apos;t load your progress
           </p>
           <p className="max-w-sm text-base text-gray-600 dark:text-gray-300">
-            {loadError} Try reloading the page — if it keeps happening, log out and back in.
+            {loadError} Try again in a moment.
           </p>
         </div>
       </main>
     )
   }
 
-  return (
-    <main className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-[#1E1E1E] sm:px-6">
-      <div className="mx-auto max-w-4xl">
-        <p className="text-sm font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-300">
-          Your progress
-        </p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-gray-950 dark:text-white">
-          Analytics
-        </h1>
-        <p className="mt-2 text-base text-gray-600 dark:text-gray-300">
-          A simple look at how your reading and writing are going.
-        </p>
+  const firstName = user?.name?.split(' ')[0] || 'there'
 
-        {/* ── Summary cards — GET /analytics/summary ── */}
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon="📚" label="Reading sessions" value={summary?.total_sessions ?? 0} />
-          <StatCard icon="🔤" label="Words read" value={summary?.total_words ?? 0} />
-          <StatCard icon="⚡" label="Average speed (wpm)" value={summary?.avg_wpm ?? 0} />
-          <StatCard icon="🏆" label="Best speed (wpm)" value={summary?.best_wpm ?? 0} />
+  return (
+    <main className="min-h-screen bg-gray-50 px-4 py-8 dark:bg-[#1E1E1E] sm:px-8">
+      <div className="mx-auto max-w-6xl">
+
+        {/* ── Greeting + mood, full width ── */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-gray-950 dark:text-white">
+              Hi {firstName}! 👋
+            </h1>
+            <p className="mt-1 text-lg text-gray-600 dark:text-gray-300">Here&apos;s how you&apos;re doing.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="flex items-center gap-2 rounded-2xl bg-blue-50 px-5 py-3 text-base font-medium
+                          text-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+              <span aria-hidden="true">{overallMood.icon}</span> {overallMood.text}
+            </p>
+            {streak > 0 && (
+              <p className="flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-base font-semibold
+                            text-gray-800 shadow-sm dark:bg-[#2A2A2A] dark:text-gray-100">
+                🔥 {streak} day{streak === 1 ? '' : 's'} in a row
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setSimpleView(v => !v)}
+              aria-pressed={simpleView}
+              className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold
+                         text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#2A2A2A]
+                         dark:text-gray-300 dark:hover:bg-gray-700
+                         focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+            >
+              {simpleView ? '📋 Show more' : '🌿 Simple view'}
+            </button>
+          </div>
         </div>
 
-        {/* F39: WPM trend */}
-        <Section
-          icon="📈"
-          title="Reading speed over time"
-          subtitle="How fast you're reading, session by session."
-        >
-          {readingChartData.length === 0 ? (
-            <EmptyState
-              icon="📖"
-              message="No reading sessions yet. Read something to see your speed here."
-              actionLabel="Start reading"
-              actionTo="/reading"
-            />
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={readingChartData} margin={{ left: 8, right: 16 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
-                <XAxis dataKey="date" tick={CHART_TICK} />
-                <YAxis tick={CHART_TICK} width={40} />
-                <Tooltip content={<ChartTooltip formatter={(v) => `${v} words per minute`} />} />
-                <Line
-                  type="monotone"
-                  dataKey="wpm"
-                  stroke={COLORS.wpm}
-                  strokeWidth={3}
-                  dot={{ r: 5, fill: COLORS.wpm }}
-                  activeDot={{ r: 7 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </Section>
-
-        {/* F40: Writing error-rate chart */}
-        <Section
-          icon="✍️"
-          title="Writing accuracy over time"
-          subtitle="Errors per 100 words — lower means fewer mistakes."
-        >
-          {writingChartData.length === 0 ? (
-            <EmptyState
-              icon="📝"
-              message="No writing sessions yet. Write something to see your progress here."
-              actionLabel="Start writing"
-              actionTo="/writing"
-            />
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={writingChartData} margin={{ left: 8, right: 16 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
-                <XAxis dataKey="date" tick={CHART_TICK} />
-                <YAxis tick={CHART_TICK} width={40} />
-                <Tooltip content={<ChartTooltip formatter={(v) => `${v} errors per 100 words`} />} />
-                <Bar dataKey="errorRate" fill={COLORS.errorRate} radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </Section>
-
-        {/* F41: Difficult words — click a bar to hear it read aloud via M1's /tts/word */}
-        <Section
-          icon="🔎"
-          title="Your most challenging words"
-          subtitle="Tap a bar to hear the word read aloud."
-        >
-          {difficultWordsChartData.length === 0 ? (
-            <EmptyState
-              icon="✨"
-              message="No challenging words yet. They'll show up here as you read."
-            />
-          ) : (
-            <ResponsiveContainer
-              width="100%"
-              height={Math.max(200, difficultWordsChartData.length * 48)}
-            >
-              <BarChart
-                data={difficultWordsChartData}
-                layout="vertical"
-                margin={{ left: 8, right: 24 }}
+        {simpleView ? (
+          <div className="mt-6 rounded-2xl bg-white p-8 text-center shadow-sm dark:bg-[#2A2A2A]">
+            <p className="text-2xl font-medium text-gray-950 dark:text-white">
+              {overallMood.icon} {overallMood.text}
+            </p>
+            {summary?.best_wpm > 0 && (
+              <p className="mt-4 text-xl text-gray-700 dark:text-gray-200">
+                Your reading speed is <span className="font-bold">{summary.best_wpm} words per minute</span>.
+              </p>
+            )}
+            {readingDirection === 'up' && (
+              <p className="mt-2 text-xl text-gray-700 dark:text-gray-200">That&apos;s faster than last time!</p>
+            )}
+            {difficultWords.length > 0 && (
+              <a
+                href="/wordbank/drill"
+                className="mt-6 inline-block rounded-2xl bg-blue-600 px-6 py-3 text-lg font-semibold text-white
+                           hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2
+                           focus-visible:outline-blue-500"
               >
-                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
-                <XAxis type="number" allowDecimals={false} tick={CHART_TICK} />
-                <YAxis type="category" dataKey="word" width={130} tick={CHART_TICK} />
-                <Tooltip content={<ChartTooltip formatter={(v) => `Seen ${v} time${v === 1 ? '' : 's'}`} />} />
-                <Bar
-                  dataKey="repeat_count"
-                  fill={COLORS.difficult}
-                  radius={[0, 8, 8, 0]}
-                  cursor="pointer"
-                  onClick={(data) => playWord(data.word)}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </Section>
+                Practice tricky words
+              </a>
+            )}
+          </div>
+        ) : (
+        <>
 
-        {/* Word Bank stats card (F51) intentionally omitted here —
-            depends on GET /wordbank/stats, which is Phase 6 work and
-            does not exist yet. Disclosed deviation from Task 5.8's
-            full spec, per Pragathi's sign-off. Add as a small additive
-            card once Phase 6 lands. */}
+        {/* ── Segmented toggle: Reading / Writing / Words ── */}
+        <div
+          role="tablist"
+          aria-label="Choose what to view"
+          className="mt-6 inline-flex rounded-2xl bg-white p-1.5 shadow-sm dark:bg-[#2A2A2A]"
+        >
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              role="tab"
+              type="button"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 rounded-xl px-6 py-3 text-base font-semibold transition-colors
+                ${activeTab === tab.id
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'}`}
+            >
+              <span aria-hidden="true">{tab.icon}</span> {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Reading tab: hero chart + full stat rail, uses the full width ── */}
+        {activeTab === 'reading' && (
+          <div className="mt-6 grid gap-4 lg:grid-cols-[2fr_1fr]">
+            <Card icon="📖" title="Your reading speed">
+              {readingChartData.length === 0 ? (
+                <EmptyState
+                  icon="📖"
+                  message="Read something to see your speed here."
+                  actionLabel="Start reading"
+                  actionTo="/reading"
+                />
+              ) : (
+                <>
+                  <div className="mb-4 text-center">
+                    <span className="text-5xl font-bold tracking-tight text-gray-950 dark:text-white">
+                      {bestWpmAnim}
+                    </span>
+                    <span className="ml-2 text-lg text-gray-500 dark:text-gray-400">
+                      words per minute, your best
+                    </span>
+                  </div>
+                  <p className="sr-only">
+                    Your reading speed chart. Current best speed is {summary?.best_wpm ?? 0} words per
+                    minute. {readingDirection === 'up' ? 'Your speed has improved since your last session.' :
+                      readingDirection === 'down' ? 'Your speed has changed since your last session.' :
+                      'Read more sessions to see how your speed changes over time.'}
+                  </p>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={readingChartData} margin={{ top: 8, left: 0, right: 8, bottom: 0 }}>
+                      <XAxis dataKey="date" tick={{ fontSize: 13, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+                      <YAxis hide domain={['dataMin - 10', 'dataMax + 10']} />
+                      <Tooltip
+                        formatter={(value) => [`${value} words per minute`, '']}
+                        labelFormatter={() => ''}
+                        contentStyle={{ borderRadius: 12, border: '1px solid #E5E7EB', fontSize: 14 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="wpm"
+                        stroke={READING_COLOR}
+                        strokeWidth={4}
+                        dot={{ r: 6, fill: READING_COLOR, strokeWidth: 0 }}
+                        activeDot={{ r: 8 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                  <div className="mt-4">
+                    <PlainVerdict
+                      direction={readingDirection}
+                      firstText="Great start! Keep reading to see your progress here."
+                      goodText="You're reading faster than last time!"
+                      sameText="You're reading at the same speed as last time."
+                      badText="Keep practicing — reading gets easier with time."
+                    />
+                  </div>
+                </>
+              )}
+            </Card>
+
+            <div className="grid grid-cols-2 gap-4 content-start lg:grid-cols-1">
+              <StatTile icon="📚" label="Reading sessions" value={totalSessionsAnim} />
+              <StatTile icon="🔤" label="Words read" value={totalWordsAnim} />
+              <StatTile icon="⚡" label="Average speed" value={`${avgWpmAnim} wpm`} />
+              <StatTile icon="🏆" label="Best speed" value={`${bestWpmAnim} wpm`} />
+            </div>
+          </div>
+        )}
+
+        {/* ── Writing tab: comparison + full stat rail, uses the full width ── */}
+        {activeTab === 'writing' && (
+          <div className="mt-6 grid gap-4 lg:grid-cols-[2fr_1fr]">
+            <Card icon="✍️" title="How well you write">
+              {writing.length === 0 ? (
+                <EmptyState
+                  icon="✍️"
+                  message="Write something to see your progress here."
+                  actionLabel="Start writing"
+                  actionTo="/writing"
+                />
+              ) : writing.length === 1 ? (
+                <div className="py-8">
+                  <p className="text-center text-xl text-gray-700 dark:text-gray-200">
+                    You made <span className="font-bold">
+                      {(writing[0].spell_error_count ?? 0) + (writing[0].grammar_error_count ?? 0) + (writing[0].homophone_flag_count ?? 0)}
+                    </span> mistake(s) in your last writing.
+                  </p>
+                  <div className="mt-4">
+                    <PlainVerdict direction="first" firstText="Great start! Keep writing to see your progress here." />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <CompareBars
+                    beforeLabel="Last time"
+                    beforeValue={(writing[1].spell_error_count ?? 0) + (writing[1].grammar_error_count ?? 0) + (writing[1].homophone_flag_count ?? 0)}
+                    nowLabel="Today"
+                    nowValue={(writing[0].spell_error_count ?? 0) + (writing[0].grammar_error_count ?? 0) + (writing[0].homophone_flag_count ?? 0)}
+                    unit="mistakes"
+                    color="#F59E0B"
+                  />
+                  <div className="mt-2">
+                    <PlainVerdict
+                      direction={writingDirection}
+                      goodText="Great job — fewer mistakes today!"
+                      sameText="You made the same number of mistakes as last time."
+                      badText="Keep practicing — you'll get there!"
+                    />
+                  </div>
+                </>
+              )}
+            </Card>
+
+            <div className="grid grid-cols-2 gap-4 content-start lg:grid-cols-1">
+              <StatTile icon="✍️" label="Writing sessions" value={totalWritingSessions} />
+              <StatTile icon="📊" label="Average mistakes" value={avgMistakes} />
+              <StatTile icon="🏆" label="Fewest mistakes" value={bestMistakes} />
+            </div>
+          </div>
+        )}
+
+        {/* ── Words tab: full-width tappable pill grid ── */}
+        {activeTab === 'words' && (
+          <div className="mt-6">
+            <Card icon="🔎" title="Words you're learning">
+              {difficultWords.length === 0 ? (
+                <EmptyState icon="✨" message="Words you find tricky will show up here as you read." />
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-3">
+                    {difficultWords.map(w => (
+                      <button
+                        key={w.word}
+                        type="button"
+                        onClick={() => playWord(w.word)}
+                        className="flex items-center gap-2 rounded-2xl bg-amber-50 px-6 py-4 text-xl
+                                   font-semibold text-amber-900 hover:bg-amber-100
+                                   dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/50
+                                   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+                      >
+                        {w.word} <span aria-hidden="true">🔊</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-6 text-center text-base text-gray-500 dark:text-gray-400">
+                    Tap any word to hear it
+                  </p>
+                </>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ── Biggest Win: one dynamically-computed insight, omitted
+            entirely when there isn't enough data for a real one ── */}
+        {biggestWin && (
+          <Card icon="✨" title="Your biggest win" className="mt-4">
+            <p className="text-lg text-gray-800 dark:text-gray-100">{biggestWin}</p>
+          </Card>
+        )}
+
+        {/* ── Progress Coach: a short observation plus a direct link
+            into the existing Word Bank drill (Phase 6), connecting
+            analytics to something the user can actually go do next ── */}
+        <Card icon="🧠" title="Your Progress Coach" className="mt-4">
+          <p className="text-lg text-gray-800 dark:text-gray-100">{coachText}</p>
+          {difficultWords.length > 0 && (
+            <>
+              <p className="mt-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Try this next</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {difficultWords.slice(0, 3).map(w => (
+                  <button
+                    key={w.word}
+                    type="button"
+                    onClick={() => playWord(w.word)}
+                    className="flex items-center gap-2 rounded-2xl bg-amber-50 px-4 py-2 text-base
+                               font-semibold text-amber-900 hover:bg-amber-100
+                               dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/50
+                               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+                  >
+                    <span aria-hidden="true">🔊</span> {w.word}
+                  </button>
+                ))}
+              </div>
+              <a
+                href="/wordbank/drill"
+                className="mt-4 inline-block rounded-2xl bg-blue-600 px-5 py-2.5 text-base font-semibold text-white
+                           hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2
+                           focus-visible:outline-blue-500"
+              >
+                Practice my tricky words →
+              </a>
+            </>
+          )}
+        </Card>
+        </>
+        )}
       </div>
     </main>
   )
