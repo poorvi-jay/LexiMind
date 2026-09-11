@@ -1,8 +1,8 @@
 """
 backend/routers/reading.py
 Endpoints: /reading/simplify, /reading/complexity, /reading/define
-Task 2 — syllable count now uses NLTK CMU Pronouncing Dictionary,
-         falling back to vowel heuristic only when word is absent.
+Task 2 — syllable count uses NLTK CMU Pronouncing Dictionary via
+         backend/services/syllables.py, vowel heuristic as fallback.
 Also enriches /reading/define response with all meanings + syllable_count.
 """
 
@@ -10,28 +10,25 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from backend.services import simplification_service
 from backend.routers.auth import get_current_user
+from backend.services.syllables import count_syllables
+from functools import lru_cache
 import httpx
-import re
-
-# ── CMU dict for accurate syllable counts (Task 2) ─────────────────
 import nltk
-from nltk.corpus import cmudict as _cmudict_module
 
-try:
-    _cmu = _cmudict_module.dict()
-except LookupError:
-    nltk.download("cmudict", quiet=True)
-    _cmu = _cmudict_module.dict()
 
 # ── WordNet: offline definitions when dictionaryapi.dev is down ────
-from nltk.corpus import wordnet as _wn
+# Loaded on first use (not at import) to keep backend startup fast.
+@lru_cache(maxsize=1)
+def _wordnet():
+    from nltk.corpus import wordnet
+    try:
+        wordnet.ensure_loaded()
+    except LookupError:
+        nltk.download("wordnet", quiet=True)
+        nltk.download("omw-1.4", quiet=True)
+        wordnet.ensure_loaded()
+    return wordnet
 
-try:
-    _wn.ensure_loaded()
-except LookupError:
-    nltk.download("wordnet", quiet=True)
-    nltk.download("omw-1.4", quiet=True)
-    _wn.ensure_loaded()
 
 _WN_POS = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
 
@@ -51,40 +48,10 @@ class DefineRequest(BaseModel):
     word: str
 
 
-# ── syllable helpers (Task 2) ──────────────────────────────────────
-def _syllables_cmu(word: str):
-    """Return syllable count from CMU dict, or None if word not found."""
-    pronunciations = _cmu.get(word.lower().strip())
-    if not pronunciations:
-        return None
-    # Each phoneme that ends with a digit represents a vowel nucleus
-    return sum(1 for phoneme in pronunciations[0] if phoneme[-1].isdigit())
-
-
-def _syllables_vowel(word: str) -> int:
-    """Fallback heuristic: count vowel groups."""
-    word = word.lower().strip()
-    if not word:
-        return 0
-    count = len(re.findall(r'[aeiouy]+', word))
-    # silent-e adjustment
-    if word.endswith('e') and count > 1:
-        count -= 1
-    return max(1, count)
-
-
-def count_syllables(word: str) -> int:
-    """Accurate syllable count: CMU dict first, vowel fallback second."""
-    cmu_count = _syllables_cmu(word)
-    if cmu_count is not None:
-        return cmu_count
-    return _syllables_vowel(word)
-
-
 def _wordnet_meanings(word: str, max_per_pos: int = 3):
     """Meanings in the dictionaryapi.dev shape, or [] if WordNet lacks the word."""
     grouped = {}
-    for synset in _wn.synsets(word):
+    for synset in _wordnet().synsets(word):
         pos = _WN_POS.get(synset.pos(), synset.pos())
         defs = grouped.setdefault(pos, [])
         if len(defs) >= max_per_pos:
@@ -163,7 +130,7 @@ async def define_word(
 
     if entry is None:
         # Offline fallback. morphy maps inflections ("studies" → "study").
-        meanings = _wordnet_meanings(word) or _wordnet_meanings(_wn.morphy(word) or word)
+        meanings = _wordnet_meanings(word) or _wordnet_meanings(_wordnet().morphy(word) or word)
         if not meanings:
             raise HTTPException(404, "Definition not found. Try a different form of the word.")
         return _build_definition(word, "", meanings, syllable_count, "wordnet")

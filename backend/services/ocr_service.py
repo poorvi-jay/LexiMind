@@ -1,13 +1,25 @@
-import easyocr
 import cv2
 import numpy as np
 import pdfplumber
 import asyncio
+import threading
 from io import BytesIO
 from fastapi import HTTPException
 
-# Load EasyOCR once at module level — never reload per request
-reader = easyocr.Reader(['en'], gpu=False)
+# EasyOCR (+ torch) takes ~20-30s to import and load, so build the reader on
+# the first OCR request instead of at startup — then reuse it forever.
+_reader = None
+_reader_lock = threading.Lock()
+
+
+def get_reader():
+    global _reader
+    if _reader is None:
+        with _reader_lock:
+            if _reader is None:
+                import easyocr
+                _reader = easyocr.Reader(['en'], gpu=False)
+    return _reader
 
 def preprocess_image(img_bytes: bytes) -> np.ndarray:
     arr = np.frombuffer(img_bytes, np.uint8)
@@ -19,7 +31,7 @@ def preprocess_image(img_bytes: bytes) -> np.ndarray:
 
 def _extract_from_image_sync(img_bytes: bytes) -> str:
     cleaned = preprocess_image(img_bytes)
-    results = reader.readtext(cleaned)
+    results = get_reader().readtext(cleaned)
     text = " ".join([res[1] for res in results])
     if not text.strip():
         raise HTTPException(status_code=400, detail="Could not extract text. Please try a clearer image or paste text manually.")
@@ -47,7 +59,7 @@ def _extract_from_pdf_sync(pdf_bytes: bytes):
             for img in images:
                 img_array = np.array(img)
                 img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                results = reader.readtext(img_bgr)
+                results = get_reader().readtext(img_bgr)
                 all_text.append(" ".join([r[1] for r in results]))
             return "\n".join(all_text), pages
 

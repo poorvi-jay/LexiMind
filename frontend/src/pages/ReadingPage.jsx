@@ -15,6 +15,8 @@ const SAMPLE_TEXT =
   'Renewable technology helps communities reduce pollution. ' +
   'These innovations make clean power available to people around the world.'
 
+const CLASSIFY_BATCH = 5000 // /classify max_length (backend/routers/classify.py)
+
 function normalizeWord(word) {
   return String(word || '').toLowerCase().replace(/[^\w']/g, '')
 }
@@ -41,6 +43,8 @@ export default function ReadingPage() {
   // Paused time is excluded from session duration / WPM (guide G.3).
   const pausedAtRef     = useRef(null)
   const pausedTotalRef  = useRef(0)
+  // True while reading is paused only because a word's definition is open.
+  const pausedForDefinitionRef = useRef(false)
 
   const classifyRequestRef = useRef(0)
 
@@ -105,14 +109,21 @@ export default function ReadingPage() {
       .then(setComplexity)
       .catch(() => showToast('Could not calculate complexity.', 'warning'))
 
-    api
-  .post('/classify', { words: nextWords })
-  .then(data => {
+  // Labels are keyed by normalized word, so classify each unique word once.
+  // /classify rejects > 5000 words (422), so long PDFs are sent in batches.
+  const uniqueWords = [...new Set(nextWords.map(normalizeWord).filter(Boolean))]
+  const batches = []
+  for (let i = 0; i < uniqueWords.length; i += CLASSIFY_BATCH) {
+    batches.push(uniqueWords.slice(i, i + CLASSIFY_BATCH))
+  }
+
+    Promise.all(batches.map(batch => api.post('/classify', { words: batch })))
+  .then(responses => {
     if (classifyRequestRef.current !== classifyRequestId) return
 
     const classified = {}
 
-    ;(data.results || []).forEach(item => {
+    responses.flatMap(data => data.results || []).forEach(item => {
       const cleanWord = normalizeWord(item.word)
       if (cleanWord) classified[cleanWord] = item.label
     })
@@ -193,6 +204,12 @@ export default function ReadingPage() {
   function handleWordClick(word) {
     const clean = normalizeWord(word)
     if (!clean) return
+    // Pause reading so the definition and word audio don't talk over it;
+    // handleDefinitionClose resumes it.
+    if (isPlaying) {
+      pauseReading()
+      pausedForDefinitionRef.current = true
+    }
     setSelectedWord(clean)
     playWord(clean)
   }
@@ -207,17 +224,30 @@ export default function ReadingPage() {
     play(words, speed, prefs.phrasePauses)
   }
 
-  function handlePauseResume() {
-    if (isPaused) {
-      if (pausedAtRef.current) {
-        pausedTotalRef.current += Date.now() - pausedAtRef.current
-        pausedAtRef.current = null
-      }
-      resume()
-    } else {
-      pausedAtRef.current = Date.now()
-      pause()
+  function pauseReading() {
+    pausedAtRef.current = Date.now()
+    pause()
+  }
+
+  function resumeReading() {
+    if (pausedAtRef.current) {
+      pausedTotalRef.current += Date.now() - pausedAtRef.current
+      pausedAtRef.current = null
     }
+    resume()
+  }
+
+  function handlePauseResume() {
+    pausedForDefinitionRef.current = false
+    if (isPaused) resumeReading()
+    else pauseReading()
+  }
+
+  /* ── Closing the definition resumes reading if a word click paused it ── */
+  function handleDefinitionClose() {
+    setSelectedWord(null)
+    if (pausedForDefinitionRef.current && isPaused) resumeReading()
+    pausedForDefinitionRef.current = false
   }
 
   /* ── Log the session (Stop click or audio finishing naturally) ── */
@@ -253,6 +283,7 @@ export default function ReadingPage() {
   }
 
   function handleStop() {
+    pausedForDefinitionRef.current = false
     logSession()
     stop()
     setActiveIndex(-1)
@@ -624,7 +655,7 @@ export default function ReadingPage() {
       )}
 
       {/* Definition panel */}
-      <DefinitionPanel word={selectedWord} onClose={() => setSelectedWord(null)} />
+      <DefinitionPanel word={selectedWord} onClose={handleDefinitionClose} />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </main>
