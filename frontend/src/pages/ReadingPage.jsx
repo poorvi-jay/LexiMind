@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import ComplexityBadge from '../components/ComplexityBadge.jsx'
 import DefinitionPanel from '../components/DefinitionPanel.jsx'
+import DocumentNavigator from '../components/DocumentNavigator.jsx'
+import PageNav from '../components/PageNav.jsx'
 import ReadingProgress from '../components/ReadingProgress.jsx'
 import { Toast } from '../components/Toast.jsx'
 import WordDisplay from '../components/WordDisplay.jsx'
 import { api } from '../utils/api'
+import {
+  normalizeWord, pageLayout, pagesFromPdf, pagesFromText, searchTerms, splitWords,
+} from '../utils/document'
 import { usePrefs } from '../context/PreferencesContext'
 import { useTTSPlayer } from '../hooks/useTTSPlayer'
 import { useToast } from '../hooks/useToast.js'
@@ -17,57 +22,56 @@ const SAMPLE_TEXT =
 
 const CLASSIFY_BATCH = 5000 // /classify max_length (backend/routers/classify.py)
 
-function normalizeWord(word) {
-  return String(word || '').toLowerCase().replace(/[^\w']/g, '')
-}
 export default function ReadingPage() {
   const { prefs } = usePrefs()
   const { toast, showToast, hideToast } = useToast()
 
-  const [text, setText]                   = useState('')
-  const [words, setWords]                 = useState([])
+  // Document: pages of { number, text }; text holds paragraphs split by "\n\n".
+  const [pages, setPages]                 = useState([])
+  const [pageIndex, setPageIndex]         = useState(0)
+  const [originals, setOriginals]         = useState({})  // pageIndex → text before Simplify
+  const [simplifiedInfo, setSimplifiedInfo] = useState({}) // pageIndex → simplify response
+  const [query, setQuery]                 = useState('')
+
   const [activeIndex, setActiveIndex]     = useState(-1)
   const [classifiedWords, setClassified]  = useState({})
   const [complexity, setComplexity]       = useState(null)
-  const [simplified, setSimplified]       = useState(null)
-  const [originalText, setOriginalText]   = useState('')
   const [selectedWord, setSelectedWord]   = useState(null)
   const [speed, setSpeed]                 = useState(1.0)
   const [isSimplifying, setIsSimplifying] = useState(false)
   const [isUploading, setIsUploading]     = useState(false)
   const [distractionFree, setDistraction] = useState(false)
-  const [classificationReady, setClassificationReady] = useState(false)
 
   const [sourceType, setSourceType] = useState('paste')
   const sessionStartRef = useRef(null)
   // Paused time is excluded from session duration / WPM (guide G.3).
   const pausedAtRef     = useRef(null)
   const pausedTotalRef  = useRef(0)
+  // Pages read during the current session (for the session log).
+  const sessionPagesRef = useRef(new Set())
   // True while reading is paused only because a word's definition is open.
   const pausedForDefinitionRef = useRef(false)
 
-  const classifyRequestRef = useRef(0)
+  // Classification: words already sent to /classify for this document.
+  const docVersionRef   = useRef(0)
+  const classifyTriedRef = useRef(new Set())
+
+  const currentPage = pages[pageIndex]
+  const currentText = currentPage?.text ?? ''
+  const { words, paragraphStarts } = useMemo(() => pageLayout(currentText), [currentText])
 
   const {
     play, pause, resume, stop, playWord, prefetch, changeSpeed,
     isPlaying, isPaused, isLoading,
     error: ttsError, totalDurationMs,
-  } = useTTSPlayer(useCallback(i => setActiveIndex(i), []), logSession)
+  } = useTTSPlayer(useCallback(i => setActiveIndex(i), []), handleReadingEnded)
+
+  const isAudioActive = isPlaying || isPaused
+  const hasText = pages.some(p => p.text.trim())
 
   useEffect(() => {
     if (ttsError) showToast(`Could not play audio: ${ttsError}`, 'error')
   }, [ttsError, showToast])
-
-    useEffect(() => {
-    function handleKeyDown(e) {
-      if (e.key === 'Escape' && distractionFree) {
-        setDistraction(false)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [distractionFree])
 
   // Warm the first TTS chunks once typing settles so Play starts instantly.
   useEffect(() => {
@@ -76,72 +80,87 @@ export default function ReadingPage() {
     return () => clearTimeout(id)
   }, [words, speed, prefs.phrasePauses, prefetch, isPlaying, isPaused])
 
-  /* ── Load text ── */
-  function loadText(raw, options = {}) {
-  const cleaned = raw.trim()
-  // New text invalidates the playing audio's word indices — stop it.
-  if (isPlaying || isPaused || isLoading) handleStop()
-  setText(raw)
-  setActiveIndex(-1)
+  // While a page plays, warm the next page so auto-advance has no gap.
+  useEffect(() => {
+    if (!isPlaying || !pages[pageIndex + 1]) return
+    prefetch(splitWords(pages[pageIndex + 1].text), speed, prefs.phrasePauses)
+  }, [isPlaying, pageIndex, pages, speed, prefs.phrasePauses, prefetch])
 
-  if (!cleaned) {
-    setWords([])
+  /* ── Complexity of the current page (debounced while editing) ── */
+  useEffect(() => {
+    const text = currentText.trim()
+    if (!text) return
+    let cancelled = false
+    const id = setTimeout(() => {
+      api.post('/reading/complexity', { text })
+        .then(data => { if (!cancelled) setComplexity(data) })
+        .catch(() => { if (!cancelled) showToast('Could not calculate complexity.', 'warning') })
+    }, 500)
+    return () => { cancelled = true; clearTimeout(id) }
+  }, [currentText, showToast])
+
+  /* ── Classify words not yet labelled, across all pages (debounced) ── */
+  useEffect(() => {
+    const version = docVersionRef.current
+    const id = setTimeout(() => {
+      const tried = classifyTriedRef.current
+      // Labels are keyed by normalized word, so classify each unique word once.
+      const missing = [...new Set(
+        pages.flatMap(p => splitWords(p.text)).map(normalizeWord).filter(Boolean),
+      )].filter(w => !tried.has(w))
+      if (!missing.length) return
+      missing.forEach(w => tried.add(w))
+
+      // /classify rejects > 5000 words (422), so long documents go in batches.
+      const batches = []
+      for (let i = 0; i < missing.length; i += CLASSIFY_BATCH) {
+        batches.push(missing.slice(i, i + CLASSIFY_BATCH))
+      }
+      Promise.all(batches.map(batch => api.post('/classify', { words: batch })))
+        .then(responses => {
+          if (docVersionRef.current !== version) return
+          const labels = {}
+          responses.flatMap(data => data.results || []).forEach(item => {
+            const clean = normalizeWord(item.word)
+            if (clean) labels[clean] = item.label
+          })
+          setClassified(prev => ({ ...prev, ...labels }))
+        })
+        .catch(error => console.error('Could not classify hard words:', error))
+    }, 500)
+    return () => clearTimeout(id)
+  }, [pages])
+
+  /* ── Load a new document ── */
+  function loadDocument(nextPages, nextSourceType) {
+    if (isPlaying || isPaused || isLoading) handleStop()
+    docVersionRef.current += 1
+    classifyTriedRef.current = new Set()
     setClassified({})
-    setClassificationReady(false)
-    setComplexity(null)
-    setSimplified(null)
-    setOriginalText('')
-    return
+    setPages(nextPages)
+    setPageIndex(0)
+    setOriginals({})
+    setSimplifiedInfo({})
+    setQuery('')
+    setActiveIndex(-1)
+    setSourceType(nextSourceType)
   }
 
-  const nextWords = cleaned.split(/\s+/).filter(w => w.length > 0)
-  setWords(nextWords)
-  setOriginalText(options.originalText ?? cleaned)
-  setSimplified(options.simplified ?? null)
-  setClassified({})
-  setClassificationReady(false)
-
-  const classifyRequestId = classifyRequestRef.current + 1
-  classifyRequestRef.current = classifyRequestId
-
-    api
-      .post('/reading/complexity', { text: cleaned })
-      .then(setComplexity)
-      .catch(() => showToast('Could not calculate complexity.', 'warning'))
-
-  // Labels are keyed by normalized word, so classify each unique word once.
-  // /classify rejects > 5000 words (422), so long PDFs are sent in batches.
-  const uniqueWords = [...new Set(nextWords.map(normalizeWord).filter(Boolean))]
-  const batches = []
-  for (let i = 0; i < uniqueWords.length; i += CLASSIFY_BATCH) {
-    batches.push(uniqueWords.slice(i, i + CLASSIFY_BATCH))
+  /* ── Edit the current page's text ── */
+  function updatePageText(index, text) {
+    // New text invalidates the playing audio's word indices — stop it.
+    if (isPlaying || isPaused || isLoading) handleStop()
+    setPages(prev => prev.map((p, i) => (i === index ? { ...p, text } : p)))
+    setActiveIndex(-1)
   }
 
-    Promise.all(batches.map(batch => api.post('/classify', { words: batch })))
-  .then(responses => {
-    if (classifyRequestRef.current !== classifyRequestId) return
-
-    const classified = {}
-
-    responses.flatMap(data => data.results || []).forEach(item => {
-      const cleanWord = normalizeWord(item.word)
-      if (cleanWord) classified[cleanWord] = item.label
-    })
-
-    setClassified(classified)
-    setClassificationReady(true)
-  })
-  .catch(error => {
-    if (classifyRequestRef.current !== classifyRequestId) return
-
-    console.error('Could not classify hard words:', error)
-    setClassified({})
-    setClassificationReady(true)
-  })
-
+  function goToPage(index) {
+    if (index < 0 || index >= pages.length || index === pageIndex) return
+    if (isPlaying || isPaused || isLoading) handleStop()
+    setPageIndex(index)
+    setActiveIndex(-1)
   }
 
-  /* ── File upload ── */
   /* ── File upload ── */
   async function handleFileUpload(event) {
     const file = event.target.files[0]
@@ -159,11 +178,18 @@ export default function ReadingPage() {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const endpoint = file.type === 'application/pdf' ? '/ocr/pdf' : '/ocr/image'
-      setSourceType(file.type === 'application/pdf' ? 'pdf' : 'image')
-      const data = await api.postForm(endpoint, formData)
-      loadText(data.text)
-      showToast(`Extracted ${data.word_count} words.`, 'success')
+      const isPdf = file.type === 'application/pdf'
+      const data = await api.postForm(isPdf ? '/ocr/pdf' : '/ocr/image', formData)
+      const nextPages = isPdf
+        ? pagesFromPdf(data.page_texts ?? [data.text])
+        : pagesFromText(data.text)
+      if (!nextPages.length) {
+        showToast('Could not extract text. Please try a clearer file.', 'error')
+        return
+      }
+      loadDocument(nextPages, isPdf ? 'pdf' : 'image')
+      const pageNote = nextPages.length > 1 ? ` across ${nextPages.length} pages` : ''
+      showToast(`Extracted ${data.word_count} words${pageNote}.`, 'success')
     } catch (err) {
       showToast(err.message, 'error')
     } finally {
@@ -172,10 +198,11 @@ export default function ReadingPage() {
     }
   }
 
-  /* ── Simplify ── */
+  /* ── Simplify the current page ── */
   async function handleSimplify() {
-    if (!text.trim()) return
-    const sourceText = text.trim()
+    const index = pageIndex
+    const sourceText = currentText.trim()
+    if (!sourceText) return
     setIsSimplifying(true)
     try {
       const data = await api.post('/reading/simplify', { text: sourceText })
@@ -184,11 +211,10 @@ export default function ReadingPage() {
         showToast('Simplification unavailable. Your original text is unchanged.', 'warning')
         return
       }
-      loadText(data.simplified_text, {
-        originalText: originalText || sourceText,
-        simplified: data,
-      })
-      showToast('Text simplified.', 'success')
+      setOriginals(prev => ({ ...prev, [index]: prev[index] ?? currentText }))
+      setSimplifiedInfo(prev => ({ ...prev, [index]: data }))
+      updatePageText(index, data.simplified_text)
+      showToast(pages.length > 1 ? `Page ${currentPage.number} simplified.` : 'Text simplified.', 'success')
     } catch (error) {
       showToast(error?.message || 'Simplification unavailable.', 'warning')
     } finally {
@@ -197,7 +223,11 @@ export default function ReadingPage() {
   }
 
   function handleRestore() {
-    loadText(originalText)
+    const index = pageIndex
+    if (originals[index] == null) return
+    updatePageText(index, originals[index])
+    setOriginals(prev => { const next = { ...prev }; delete next[index]; return next })
+    setSimplifiedInfo(prev => { const next = { ...prev }; delete next[index]; return next })
     showToast('Original text restored.', 'info')
   }
 
@@ -214,14 +244,29 @@ export default function ReadingPage() {
     playWord(clean)
   }
 
-  /* ── Play — the player chunks the full word list, so indices match WordDisplay ── */
+  /* ── Play — the player chunks the page's word list, so indices match WordDisplay ── */
   function handlePlay() {
     if (!sessionStartRef.current) {
       sessionStartRef.current = Date.now()
       pausedAtRef.current     = null
       pausedTotalRef.current  = 0
+      sessionPagesRef.current = new Set()
     }
+    sessionPagesRef.current.add(pageIndex)
     play(words, speed, prefs.phrasePauses)
+  }
+
+  /* ── A page finished: continue onto the next page, or end the session ── */
+  function handleReadingEnded() {
+    const next = pageIndex + 1
+    if (next < pages.length) {
+      sessionPagesRef.current.add(next)
+      setPageIndex(next)
+      setActiveIndex(-1)
+      play(splitWords(pages[next].text), speed, prefs.phrasePauses)
+    } else {
+      logSession()
+    }
   }
 
   function pauseReading() {
@@ -250,28 +295,30 @@ export default function ReadingPage() {
     pausedForDefinitionRef.current = false
   }
 
-  /* ── Log the session (Stop click or audio finishing naturally) ── */
+  /* ── Log the session (Stop click or the last page finishing) ── */
   function logSession() {
     if (sessionStartRef.current) {
       const now = Date.now()
       const pausedMs = pausedTotalRef.current +
         (pausedAtRef.current ? now - pausedAtRef.current : 0)
       const elapsedSeconds = Math.round((now - sessionStartRef.current - pausedMs) / 1000)
-      if (elapsedSeconds >= 30 && showWords.length > 0) {
-        const wordPayload = showWords.map(w => {
+      const readPages = [...sessionPagesRef.current].sort((a, b) => a - b)
+      const sessionWords = readPages.flatMap(i => splitWords(pages[i]?.text))
+      if (elapsedSeconds >= 30 && sessionWords.length > 0) {
+        const wordPayload = sessionWords.map(w => {
           const clean = normalizeWord(w)
           return { word: clean, label: classifiedWords[clean] || 'Easy' }
         })
         const hardCount = wordPayload.filter(w => w.label === 'Hard').length
-        const wpm = Math.round(showWords.length / (elapsedSeconds / 60))
+        const wpm = Math.round(sessionWords.length / (elapsedSeconds / 60))
 
         api.post('/sessions/reading', {
           wpm,
-          total_words: showWords.length,
+          total_words: sessionWords.length,
           hard_word_count: hardCount,
           duration_seconds: elapsedSeconds,
           source_type: sourceType,
-          simplified: Boolean(simplified),
+          simplified: readPages.some(i => simplifiedInfo[i]),
           complexity_score: complexity?.hard_word_pct ?? null,
           words: wordPayload,
         }).catch(err => console.error('Could not log reading session:', err))
@@ -279,6 +326,7 @@ export default function ReadingPage() {
       sessionStartRef.current = null
       pausedAtRef.current     = null
       pausedTotalRef.current  = 0
+      sessionPagesRef.current = new Set()
     }
   }
 
@@ -288,54 +336,100 @@ export default function ReadingPage() {
     stop()
     setActiveIndex(-1)
   }
+
   function handleSpeedChange(nextSpeed) {
     setSpeed(nextSpeed)
     changeSpeed(nextSpeed)
   }
 
-  const hasText = words.length > 0
-  const showWords = words
-  const isAudioActive = isPlaying || isPaused
-
   const classifierHardWordPct = useMemo(() => {
-    if (!classificationReady || words.length === 0) return null
-
-    const hardCount = words.filter(word => {
-      const clean = normalizeWord(word)
-      return classifiedWords[clean] === 'Hard'
-    }).length
-
-    return Math.round((hardCount / words.length) * 100)
-  }, [classificationReady, words, classifiedWords])
+    if (words.length === 0) return null
+    const cleaned = words.map(normalizeWord).filter(Boolean)
+    if (!cleaned.length || !cleaned.every(w => w in classifiedWords)) return null
+    const hardCount = cleaned.filter(w => classifiedWords[w] === 'Hard').length
+    return Math.round((hardCount / cleaned.length) * 100)
+  }, [words, classifiedWords])
 
   const displayedComplexity = useMemo(() => {
-    if (!complexity || classifierHardWordPct === null) return complexity
+    if (!complexity || !currentText.trim()) return null
+    if (classifierHardWordPct === null) return complexity
     return { ...complexity, hard_word_pct: classifierHardWordPct }
-  }, [complexity, classifierHardWordPct])
+  }, [complexity, classifierHardWordPct, currentText])
+
+  /* ── Keyboard: Escape leaves focus mode; ← / → change page ── */
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape' && distractionFree) {
+        setDistraction(false)
+        return
+      }
+      const typing = e.target.closest?.('input, textarea, select, [contenteditable="true"]')
+      if (typing || selectedWord || e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.key === 'ArrowRight') goToPage(pageIndex + 1)
+      if (e.key === 'ArrowLeft') goToPage(pageIndex - 1)
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  })
+
+  const activeSearchTerms = useMemo(
+    () => (query.trim().length >= 2 ? searchTerms(query) : []),
+    [query],
+  )
+
+  const isMultiPage = pages.length > 1
+  const pageSimplified = simplifiedInfo[pageIndex]
+
+  const readingColumn = (
+    <>
+      <PageNav pages={pages} pageIndex={pageIndex} onChange={goToPage} />
+      <WordDisplay
+        words={words}
+        paragraphStarts={paragraphStarts}
+        activeIndex={activeIndex}
+        classifiedWords={classifiedWords}
+        onWordClick={handleWordClick}
+        focusRulerEnabled={prefs.focusRuler}
+        searchTerms={activeSearchTerms}
+      />
+      <ReadingProgress
+        activeIndex={activeIndex}
+        totalWords={words.length}
+        durationMs={totalDurationMs}
+      />
+      {isMultiPage && words.length > 150 && (
+        <PageNav pages={pages} pageIndex={pageIndex} onChange={goToPage} />
+      )}
+    </>
+  )
 
   return (
     <main
       className={
         distractionFree
           ? 'min-h-screen p-4 pb-28'
-          : 'min-h-screen bg-gray-50/70 px-4 py-8 pb-28 dark:bg-[#1E1E1E] sm:px-6'
+          : 'min-h-screen bg-gray-50/70 px-4 py-6 pb-28 dark:bg-[#1E1E1E] sm:px-6'
       }
     >
       {/* ════════════ NORMAL MODE ════════════ */}
       {!distractionFree && (
-        <section className="mx-auto max-w-6xl">
-          {/* Page header */}
-          <div className="mb-8">
+        <section className="mx-auto max-w-[1440px]">
+          {/* Page header — compact once a document is open */}
+          <div className={hasText ? 'mb-5' : 'mb-8'}>
             <p className="text-sm font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-300">
               Reading workspace
             </p>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight text-gray-950 dark:text-white sm:text-4xl">
+            <h1 className={`mt-1 font-bold tracking-tight text-gray-950 dark:text-white
+              ${hasText ? 'text-2xl' : 'text-3xl sm:text-4xl'}`}>
               Read, listen, and understand.
             </h1>
-            <p className="mt-3 max-w-2xl text-base leading-relaxed text-gray-600 dark:text-gray-300">
-              Upload your notes, simplify hard passages, listen with word-by-word
-              highlighting, and tap any word for its meaning.
-            </p>
+            {!hasText && (
+              <p className="mt-3 max-w-2xl text-base leading-relaxed text-gray-600 dark:text-gray-300">
+                Upload your notes, simplify hard passages, listen with word-by-word
+                highlighting, and tap any word for its meaning.
+              </p>
+            )}
           </div>
 
           {/* ════════════ EMPTY STATE ════════════ */}
@@ -394,7 +488,7 @@ export default function ReadingPage() {
 
                 <button
                   type="button"
-                  onClick={() => loadText(SAMPLE_TEXT)}
+                  onClick={() => loadDocument(pagesFromText(SAMPLE_TEXT), 'paste')}
                   className="group flex flex-col items-center gap-3
                               rounded-2xl border border-gray-200 bg-gray-50 p-6
                               transition-colors hover:border-blue-300 hover:bg-blue-50
@@ -415,19 +509,56 @@ export default function ReadingPage() {
                               focus:border-blue-400 focus:outline-none
                               dark:border-gray-700 dark:bg-[#333]"
                   placeholder="Or paste your text here…"
-                  value={text}
-                  onChange={e => { setSourceType('paste'); loadText(e.target.value) }}
+                  value=""
+                  onChange={e => loadDocument(pagesFromText(e.target.value), 'paste')}
                   aria-label="Paste your reading text"
                 />
               </div>
             </div>
           )}
 
-          {/* ════════════ READING LAYOUT ════════════ */}
+          {/* ════════════ READING LAYOUT ════════════
+              xl:  [pages + search] [reading] [tools]
+              lg:  [reading] [pages + search / tools stacked]
+              <lg: reading, then pages/search, then tools */}
           {hasText && (
-            <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-              {/* Left sidebar */}
-              <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+            <div
+              className={`grid gap-5 ${isMultiPage
+                ? 'lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[260px_minmax(0,1fr)_320px]'
+                : 'lg:grid-cols-[minmax(0,1fr)_320px]'}`}
+            >
+              {isMultiPage && (
+                <aside
+                  className="order-2 lg:order-none lg:col-start-2 lg:row-start-1
+                              xl:sticky xl:top-20 xl:col-start-1 xl:self-start"
+                  aria-label="Pages and search"
+                >
+                  <DocumentNavigator
+                    pages={pages}
+                    pageIndex={pageIndex}
+                    onSelectPage={goToPage}
+                    query={query}
+                    onQueryChange={setQuery}
+                  />
+                </aside>
+              )}
+
+              <section
+                className={`order-1 min-w-0 space-y-4 lg:order-none lg:col-start-1 lg:row-start-1
+                  ${isMultiPage ? 'lg:row-span-2 xl:col-start-2 xl:row-span-1' : ''}`}
+                aria-label="Reading content"
+              >
+                {readingColumn}
+              </section>
+
+              {/* Tools: upload, edit this page, simplify, complexity */}
+              <aside
+                className={`order-3 space-y-4 lg:order-none lg:col-start-2 lg:self-start
+                  ${isMultiPage
+                    ? 'lg:row-start-2 xl:sticky xl:top-20 xl:col-start-3 xl:row-start-1'
+                    : 'lg:sticky lg:top-20 lg:row-start-1'}`}
+                aria-label="Tools"
+              >
                 <div
                   className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm
                               dark:border-gray-800 dark:bg-[#2A2A2A]"
@@ -447,7 +578,7 @@ export default function ReadingPage() {
                     </label>
                     <button
                       type="button"
-                      onClick={() => loadText(SAMPLE_TEXT)}
+                      onClick={() => loadDocument(pagesFromText(SAMPLE_TEXT), 'paste')}
                       className="rounded-lg border border-gray-200 px-3 py-2 text-xs
                                   font-semibold text-gray-600 hover:bg-gray-50
                                   dark:border-gray-700 dark:text-gray-300"
@@ -458,31 +589,31 @@ export default function ReadingPage() {
 
                   <label
                     className="text-xs font-semibold text-gray-500 dark:text-gray-400"
-                    htmlFor="sidebar-text"
+                    htmlFor="page-editor"
                   >
-                    Edit text
+                    {isMultiPage ? `Edit page ${currentPage.number}` : 'Edit text'}
                   </label>
                   <textarea
-                    id="sidebar-text"
-                    className="surface mt-1 min-h-24 w-full resize-y rounded-xl border
-                                border-gray-200 bg-white p-3 text-xs shadow-inner
+                    id="page-editor"
+                    className="surface mt-1 min-h-[16rem] w-full resize-y rounded-xl border
+                                border-gray-200 bg-white p-3 text-sm leading-relaxed shadow-inner
                                 focus:border-blue-400 focus:outline-none
                                 dark:border-gray-700"
-                    value={text}
-                    onChange={e => { setSourceType('paste'); loadText(e.target.value) }}
+                    value={currentText}
+                    onChange={e => { setSourceType('paste'); updatePageText(pageIndex, e.target.value) }}
                   />
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={handleSimplify}
-                      disabled={!hasText || isSimplifying}
+                      disabled={!currentText.trim() || isSimplifying}
                       className="rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold
                                   text-white hover:bg-purple-700 disabled:opacity-50"
                     >
-                      {isSimplifying ? 'Simplifying…' : '✨ Simplify'}
+                      {isSimplifying ? 'Simplifying…' : isMultiPage ? '✨ Simplify this page' : '✨ Simplify'}
                     </button>
-                    {simplified && (
+                    {pageSimplified && (
                       <button
                         type="button"
                         onClick={handleRestore}
@@ -498,34 +629,17 @@ export default function ReadingPage() {
 
                 {displayedComplexity && <ComplexityBadge complexity={displayedComplexity} />}
 
-                {simplified && (
+                {pageSimplified && (
                   <div
                     className="rounded-xl border border-purple-100 bg-purple-50 p-3
                                 text-xs text-purple-800
                                 dark:border-purple-900 dark:bg-purple-950/40 dark:text-purple-200"
                   >
-                    Hard words reduced from {simplified.original_hard_word_pct}%
-                    to {simplified.simplified_hard_word_pct}%.
+                    Hard words reduced from {pageSimplified.original_hard_word_pct}%
+                    to {pageSimplified.simplified_hard_word_pct}%.
                   </div>
                 )}
               </aside>
-
-              {/* Right: reading content */}
-              <section className="space-y-4" aria-label="Reading content">
-                <WordDisplay
-                  words={showWords}
-                  activeIndex={activeIndex}
-                  classifiedWords={classifiedWords}
-                  onWordClick={handleWordClick}
-                  focusRulerEnabled={prefs.focusRuler}
-                />
-
-                <ReadingProgress
-                  activeIndex={activeIndex}
-                  totalWords={showWords.length}
-                  durationMs={totalDurationMs}
-                />
-              </section>
             </div>
           )}
         </section>
@@ -534,23 +648,12 @@ export default function ReadingPage() {
       {/* ════════════ DISTRACTION-FREE MODE ════════════ */}
       {distractionFree && hasText && (
         <section className="distraction-free mx-auto max-w-3xl space-y-4">
-          <WordDisplay
-            words={showWords}
-            activeIndex={activeIndex}
-            classifiedWords={classifiedWords}
-            onWordClick={handleWordClick}
-            focusRulerEnabled={prefs.focusRuler}
-          />
-          <ReadingProgress
-            activeIndex={activeIndex}
-            totalWords={showWords.length}
-            durationMs={totalDurationMs}
-          />
+          {readingColumn}
         </section>
       )}
 
       {/* ═══════════════════════════════════════════════════
-          FIX #2: STICKY PLAYBACK TOOLBAR — always visible
+          STICKY PLAYBACK TOOLBAR — always visible
           ═══════════════════════════════════════════════════ */}
       {hasText && (
         <div
@@ -566,7 +669,7 @@ export default function ReadingPage() {
               <button
                 type="button"
                 onClick={handlePlay}
-                disabled={isLoading}
+                disabled={isLoading || !words.length}
                 className="rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-bold
                             text-white shadow-md shadow-blue-200 hover:bg-blue-700
                             disabled:opacity-50 dark:shadow-none"
@@ -609,10 +712,15 @@ export default function ReadingPage() {
               {distractionFree ? '← Exit Focus' : '🎯 Focus'}
             </button>
 
-            {/* Current word indicator */}
-            {isAudioActive && activeIndex >= 0 && activeIndex < showWords.length && (
+            {/* Current page / word indicator */}
+            {isMultiPage && (
+              <span className="hidden text-xs font-semibold text-gray-500 dark:text-gray-400 md:inline">
+                Page {currentPage.number}
+              </span>
+            )}
+            {isAudioActive && activeIndex >= 0 && activeIndex < words.length && (
               <div className="current-word-display ml-2 hidden sm:flex" aria-live="polite">
-                {showWords[activeIndex]?.replace(/[^a-zA-Z']/g, '') || ''}
+                {words[activeIndex]?.replace(/[^a-zA-Z']/g, '') || ''}
               </div>
             )}
 
@@ -644,8 +752,8 @@ export default function ReadingPage() {
               <div
                 className="reading-progress-fill rounded-none"
                 style={{
-                  width: `${showWords.length > 0
-                    ? Math.round(((activeIndex + 1) / showWords.length) * 100)
+                  width: `${words.length > 0
+                    ? Math.round(((activeIndex + 1) / words.length) * 100)
                     : 0}%`
                 }}
               />

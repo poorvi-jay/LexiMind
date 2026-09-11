@@ -42,26 +42,26 @@ async def extract_from_image(img_bytes: bytes) -> str:
     return await asyncio.to_thread(_extract_from_image_sync, img_bytes)
 
 def _extract_from_pdf_sync(pdf_bytes: bytes):
+    """Returns (page_texts, page_count) — one string per PDF page, in order,
+    so the reader can show the document page by page."""
     try:
         with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
             pages = len(pdf.pages)
-            text = "\n".join(
-                page.extract_text() or "" for page in pdf.pages
-            )
-            if text.strip():
-                return text, pages
+            page_texts = [page.extract_text() or "" for page in pdf.pages]
+            if any(t.strip() for t in page_texts):
+                return page_texts, pages
 
             # Scanned PDF fallback — use pdf2image + EasyOCR
             from pdf2image import convert_from_bytes
             images = convert_from_bytes(pdf_bytes)
             pages = len(images)
-            all_text = []
+            page_texts = []
             for img in images:
                 img_array = np.array(img)
                 img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
                 results = get_reader().readtext(img_bgr)
-                all_text.append(" ".join([r[1] for r in results]))
-            return "\n".join(all_text), pages
+                page_texts.append(" ".join([r[1] for r in results]))
+            return page_texts, pages
 
     except Exception as e:
         if "password" in str(e).lower():
