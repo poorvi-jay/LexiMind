@@ -8,6 +8,10 @@ load_dotenv()
 # Load Groq client once at module level
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+# llama-3.3-70b-versatile was retired by Groq (404 model_not_found).
+# Override with GROQ_MODEL in backend/.env if this one is retired too.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
 SIMPLIFICATION_PROMPT = """You are an expert reading assistant helping a person with dyslexia read more easily.
 
 Rewrite the following text following these strict rules:
@@ -63,7 +67,7 @@ async def simplify_text(text: str) -> dict:
     """F42 — Simplify text using Groq LLaMA model"""
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=GROQ_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -71,10 +75,20 @@ async def simplify_text(text: str) -> dict:
                 }
             ],
             temperature=0.3,
-            max_tokens=2048,
+            # gpt-oss is a reasoning model: hidden reasoning tokens count
+            # toward max_tokens, so keep effort low and leave headroom or
+            # long notes come back empty.
+            reasoning_effort="low",
+            max_tokens=8192,
         )
 
-        simplified = response.choices[0].message.content.strip()
+        choice = response.choices[0]
+        simplified = (choice.message.content or "").strip()
+        if not simplified or choice.finish_reason == "length":
+            raise ValueError(
+                f"incomplete output (finish_reason={choice.finish_reason}, "
+                f"chars={len(simplified)})"
+            )
 
         original_hard_pct = count_hard_words(text)
         simplified_hard_pct = count_hard_words(simplified)
@@ -90,6 +104,7 @@ async def simplify_text(text: str) -> dict:
         }
 
     except Exception as e:
+        print(f"[simplify] Groq call failed: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=503,
             detail="Simplification unavailable. You can still read the original text."

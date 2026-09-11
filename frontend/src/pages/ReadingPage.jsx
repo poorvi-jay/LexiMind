@@ -8,7 +8,6 @@ import WordDisplay from '../components/WordDisplay.jsx'
 import { api } from '../utils/api'
 import { usePrefs } from '../context/PreferencesContext'
 import { useTTSPlayer } from '../hooks/useTTSPlayer'
-import { useTTSPrefetch } from '../hooks/useTTSPrefetch'
 import { useToast } from '../hooks/useToast.js'
 
 const SAMPLE_TEXT =
@@ -40,13 +39,10 @@ export default function ReadingPage() {
   const [sourceType, setSourceType] = useState('paste')
   const sessionStartRef = useRef(null)
 
-  // Store the raw word_timings so we can use backend's word list
-  const [wordTimings, setWordTimings]     = useState([])
   const classifyRequestRef = useRef(0)
-  const { prefetch, getCached, clearCache } = useTTSPrefetch()
 
   const {
-    play, pause, resume, stop, playWord, getCurrentWordIndex,
+    play, pause, resume, stop, playWord, prefetch, changeSpeed,
     isPlaying, isPaused, isLoading,
     error: ttsError, totalDurationMs,
   } = useTTSPlayer(useCallback(i => setActiveIndex(i), []))
@@ -66,26 +62,18 @@ export default function ReadingPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [distractionFree])
 
+  // Warm the first TTS chunks once typing settles so Play starts instantly.
   useEffect(() => {
-    if (text.trim()) prefetch(text.trim(), speed, prefs.phrasePauses)
-  }, [text, speed, prefs.phrasePauses, prefetch])
-
-  /* ── FIX #3: When TTS data arrives, rebuild words from timings ── */
-  const displayWords = useMemo(() => {
-    // If we have word timings, use THOSE words so indices match exactly
-    if (wordTimings.length > 0) {
-      return wordTimings.map(t => t.word)
-    }
-    // Fallback to split
-    return words
-  }, [wordTimings, words])
+    if (!words.length || isPlaying || isPaused) return
+    const id = setTimeout(() => prefetch(words, speed, prefs.phrasePauses), 600)
+    return () => clearTimeout(id)
+  }, [words, speed, prefs.phrasePauses, prefetch, isPlaying, isPaused])
 
   /* ── Load text ── */
   function loadText(raw, options = {}) {
   const cleaned = raw.trim()
   setText(raw)
   setActiveIndex(-1)
-  setWordTimings([])
 
   if (!cleaned) {
     setWords([])
@@ -94,7 +82,6 @@ export default function ReadingPage() {
     setComplexity(null)
     setSimplified(null)
     setOriginalText('')
-    clearCache()
     return
   }
 
@@ -176,6 +163,11 @@ export default function ReadingPage() {
     setIsSimplifying(true)
     try {
       const data = await api.post('/reading/simplify', { text: sourceText })
+      // Never replace the user's notes with an empty result.
+      if (!data?.simplified_text?.trim()) {
+        showToast('Simplification unavailable. Your original text is unchanged.', 'warning')
+        return
+      }
       loadText(data.simplified_text, {
         originalText: originalText || sourceText,
         simplified: data,
@@ -200,52 +192,10 @@ export default function ReadingPage() {
     playWord(clean)
   }
 
-  /* ── Play — also capture word_timings for display sync ── */
-  async function handlePlay() {
+  /* ── Play — the player chunks the full word list, so indices match WordDisplay ── */
+  function handlePlay() {
     if (!sessionStartRef.current) sessionStartRef.current = Date.now()
-    const trimmed = text.trim()
-    const cached = getCached(trimmed, speed, prefs.phrasePauses)
-
-    // Capture word timings for display word sync
-    if (cached?.word_timings) {
-      setWordTimings(cached.word_timings)
-      console.log(`[ReadingPage] Using ${cached.word_timings.length} cached timing words`)
-    } else {
-      // If not cached, we'll get timings from the API response
-      // The play function handles this internally, but we also need them
-      try {
-        const data = await api.post('/tts/generate', {
-          text: trimmed,
-          speed,
-          voice: 'en-GB-SoniaNeural',
-          phrase_pauses: prefs.phrasePauses,
-        })
-
-        const binary = atob(data.audio_b64)
-        const bytes  = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-        const blob = new Blob([bytes], { type: 'audio/mpeg' })
-
-        const prefetchedData = {
-          blob,
-          word_timings: data.word_timings,
-          duration_ms: data.duration_ms || 0,
-        }
-
-        if (data.word_timings) {
-          setWordTimings(data.word_timings)
-          console.log(`[ReadingPage] Using ${data.word_timings.length} fresh timing words`)
-        }
-
-        play(trimmed, speed, prefs.phrasePauses, prefetchedData)
-        return
-      } catch (err) {
-        showToast(err.message, 'error')
-        return
-      }
-    }
-
-    play(trimmed, speed, prefs.phrasePauses, cached)
+    play(words, speed, prefs.phrasePauses)
   }
 
   function handlePauseResume() {
@@ -278,27 +228,15 @@ export default function ReadingPage() {
       sessionStartRef.current = null
     }
     stop()
-    setWordTimings([])
     setActiveIndex(-1)
   }
-  async function handleSpeedChange(nextSpeed) {
+  function handleSpeedChange(nextSpeed) {
     setSpeed(nextSpeed)
-
-    if (!isPlaying) return
-
-    const currentIndex = Math.max(getCurrentWordIndex(), activeIndex, 0)
-    const sourceWords = showWords.length > 0 ? showWords : words
-    const remainingText = sourceWords.slice(currentIndex).join(' ')
-
-    if (!remainingText.trim()) return
-
-    stop()
-    setWordTimings([])
-    await play(remainingText, nextSpeed, prefs.phrasePauses, null, currentIndex)
+    changeSpeed(nextSpeed)
   }
 
-  const hasText = displayWords.length > 0 || words.length > 0
-  const showWords = displayWords.length > 0 ? displayWords : words
+  const hasText = words.length > 0
+  const showWords = words
   const isAudioActive = isPlaying || isPaused
 
   const classifierHardWordPct = useMemo(() => {
