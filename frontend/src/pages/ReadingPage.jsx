@@ -38,6 +38,9 @@ export default function ReadingPage() {
 
   const [sourceType, setSourceType] = useState('paste')
   const sessionStartRef = useRef(null)
+  // Paused time is excluded from session duration / WPM (guide G.3).
+  const pausedAtRef     = useRef(null)
+  const pausedTotalRef  = useRef(0)
 
   const classifyRequestRef = useRef(0)
 
@@ -45,7 +48,7 @@ export default function ReadingPage() {
     play, pause, resume, stop, playWord, prefetch, changeSpeed,
     isPlaying, isPaused, isLoading,
     error: ttsError, totalDurationMs,
-  } = useTTSPlayer(useCallback(i => setActiveIndex(i), []))
+  } = useTTSPlayer(useCallback(i => setActiveIndex(i), []), logSession)
 
   useEffect(() => {
     if (ttsError) showToast(`Could not play audio: ${ttsError}`, 'error')
@@ -72,6 +75,8 @@ export default function ReadingPage() {
   /* ── Load text ── */
   function loadText(raw, options = {}) {
   const cleaned = raw.trim()
+  // New text invalidates the playing audio's word indices — stop it.
+  if (isPlaying || isPaused || isLoading) handleStop()
   setText(raw)
   setActiveIndex(-1)
 
@@ -194,18 +199,34 @@ export default function ReadingPage() {
 
   /* ── Play — the player chunks the full word list, so indices match WordDisplay ── */
   function handlePlay() {
-    if (!sessionStartRef.current) sessionStartRef.current = Date.now()
+    if (!sessionStartRef.current) {
+      sessionStartRef.current = Date.now()
+      pausedAtRef.current     = null
+      pausedTotalRef.current  = 0
+    }
     play(words, speed, prefs.phrasePauses)
   }
 
   function handlePauseResume() {
-    if (isPaused) resume()
-    else pause()
+    if (isPaused) {
+      if (pausedAtRef.current) {
+        pausedTotalRef.current += Date.now() - pausedAtRef.current
+        pausedAtRef.current = null
+      }
+      resume()
+    } else {
+      pausedAtRef.current = Date.now()
+      pause()
+    }
   }
 
-  function handleStop() {
+  /* ── Log the session (Stop click or audio finishing naturally) ── */
+  function logSession() {
     if (sessionStartRef.current) {
-      const elapsedSeconds = Math.round((Date.now() - sessionStartRef.current) / 1000)
+      const now = Date.now()
+      const pausedMs = pausedTotalRef.current +
+        (pausedAtRef.current ? now - pausedAtRef.current : 0)
+      const elapsedSeconds = Math.round((now - sessionStartRef.current - pausedMs) / 1000)
       if (elapsedSeconds >= 30 && showWords.length > 0) {
         const wordPayload = showWords.map(w => {
           const clean = normalizeWord(w)
@@ -226,7 +247,13 @@ export default function ReadingPage() {
         }).catch(err => console.error('Could not log reading session:', err))
       }
       sessionStartRef.current = null
+      pausedAtRef.current     = null
+      pausedTotalRef.current  = 0
     }
+  }
+
+  function handleStop() {
+    logSession()
     stop()
     setActiveIndex(-1)
   }

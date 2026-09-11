@@ -23,6 +23,18 @@ except LookupError:
     nltk.download("cmudict", quiet=True)
     _cmu = _cmudict_module.dict()
 
+# ── WordNet: offline definitions when dictionaryapi.dev is down ────
+from nltk.corpus import wordnet as _wn
+
+try:
+    _wn.ensure_loaded()
+except LookupError:
+    nltk.download("wordnet", quiet=True)
+    nltk.download("omw-1.4", quiet=True)
+    _wn.ensure_loaded()
+
+_WN_POS = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
+
 
 router = APIRouter()
 
@@ -69,6 +81,38 @@ def count_syllables(word: str) -> int:
     return _syllables_vowel(word)
 
 
+def _wordnet_meanings(word: str, max_per_pos: int = 3):
+    """Meanings in the dictionaryapi.dev shape, or [] if WordNet lacks the word."""
+    grouped = {}
+    for synset in _wn.synsets(word):
+        pos = _WN_POS.get(synset.pos(), synset.pos())
+        defs = grouped.setdefault(pos, [])
+        if len(defs) >= max_per_pos:
+            continue
+        entry = {"definition": synset.definition()}
+        if synset.examples():
+            entry["example"] = synset.examples()[0]
+        defs.append(entry)
+    return [{"partOfSpeech": pos, "definitions": defs} for pos, defs in grouped.items()]
+
+
+def _build_definition(word, phonetic, meanings, syllable_count, source):
+    definition = next((d["definition"] for m in meanings for d in m["definitions"]), "")
+    example = next(
+        (d["example"] for m in meanings for d in m["definitions"] if d.get("example")), ""
+    )
+    return {
+        "word": word,
+        "phonetic": phonetic,
+        "definition": definition,
+        "example": example,
+        "syllable_count": syllable_count,
+        "syllables": syllable_count,       # kept for backward compat
+        "meanings": meanings,              # full meanings for AC-34
+        "source": source,
+    }
+
+
 # ── endpoints ──────────────────────────────────────────────────────
 
 @router.post("/reading/simplify")
@@ -103,64 +147,40 @@ async def define_word(
     # ── Task 2: accurate syllable count ────────────────────────────
     syllable_count = count_syllables(word)
 
-    # ── dictionary API lookup ──────────────────────────────────────
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}",
-            timeout=5.0
-        )
+    # ── online dictionary (phonetics + richer data) ────────────────
+    # dictionaryapi.dev is free and often slow or down, so keep the
+    # timeout short and fall back to offline WordNet on any failure.
+    entry = None
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(
+                f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+            )
+        if response.status_code == 200:
+            entry = response.json()[0]
+    except (httpx.HTTPError, ValueError, IndexError, KeyError, TypeError):
+        entry = None
 
-    if response.status_code == 404:
-        raise HTTPException(404, "Definition not found. Try a different form of the word.")
-
-    data = response.json()
-    entry = data[0]
+    if entry is None:
+        # Offline fallback. morphy maps inflections ("studies" → "study").
+        meanings = _wordnet_meanings(word) or _wordnet_meanings(_wn.morphy(word) or word)
+        if not meanings:
+            raise HTTPException(404, "Definition not found. Try a different form of the word.")
+        return _build_definition(word, "", meanings, syllable_count, "wordnet")
 
     # Extract phonetic
     phonetic = entry.get("phonetic", "")
-    if not phonetic and entry.get("phonetics"):
-        for ph in entry.get("phonetics", []):
-            if ph.get("text"):
-                phonetic = ph["text"]
-                break
+    if not phonetic:
+        phonetic = next((ph["text"] for ph in entry.get("phonetics", []) if ph.get("text")), "")
 
-    # Extract first definition and example (kept for backward compat)
-    definition = ""
-    example = ""
-
-    # Also build full meanings list for richer AC-34 response
-    meanings_raw = entry.get("meanings", [])
-    meanings_out = []
-
-    for m in meanings_raw:
-        part_of_speech = m.get("partOfSpeech", "")
-        defs_raw = m.get("definitions", [])
+    meanings = []
+    for m in entry.get("meanings", []):
         defs_out = []
-
-        for d in defs_raw:
+        for d in m.get("definitions", []):
             def_entry = {"definition": d.get("definition", "")}
             if d.get("example"):
                 def_entry["example"] = d["example"]
-                # capture first example we find
-                if not example:
-                    example = d["example"]
             defs_out.append(def_entry)
+        meanings.append({"partOfSpeech": m.get("partOfSpeech", ""), "definitions": defs_out})
 
-        # capture first definition we find
-        if not definition and defs_out:
-            definition = defs_out[0].get("definition", "")
-
-        meanings_out.append({
-            "partOfSpeech": part_of_speech,
-            "definitions": defs_out
-        })
-
-    return {
-        "word": word,
-        "phonetic": phonetic,
-        "definition": definition,
-        "example": example,
-        "syllable_count": syllable_count,
-        "syllables": syllable_count,       # kept for backward compat
-        "meanings": meanings_out           # full meanings for AC-34
-    }
+    return _build_definition(word, phonetic, meanings, syllable_count, "dictionaryapi")

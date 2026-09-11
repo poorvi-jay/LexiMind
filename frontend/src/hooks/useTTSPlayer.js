@@ -43,7 +43,12 @@ function base64ToBlob(b64) {
   return new Blob([bytes], { type: 'audio/mpeg' })
 }
 
-export function useTTSPlayer(onWordChange) {
+/**
+ * @param onWordChange(globalIndex) — highlight callback (-1 = none)
+ * @param onEnded() — fired only when the last chunk finishes naturally
+ *                    (not on stop, error, or restart)
+ */
+export function useTTSPlayer(onWordChange, onEnded) {
   const [isPlaying, setIsPlaying]             = useState(false)
   const [isPaused, setIsPaused]               = useState(false)
   const [isLoading, setIsLoading]             = useState(false)
@@ -68,7 +73,10 @@ export function useTTSPlayer(onWordChange) {
   const onWordRef      = useRef(onWordChange)
   const playChunkRef   = useRef(null)   // lets onended recurse into playChunk
 
+  const onEndedRef     = useRef(onEnded)
+
   useEffect(() => { onWordRef.current = onWordChange }, [onWordChange])
+  useEffect(() => { onEndedRef.current = onEnded }, [onEnded])
 
   const setWord = useCallback((i) => {
     wordIndexRef.current = i
@@ -165,6 +173,7 @@ export function useTTSPlayer(onWordChange) {
     const chunks = chunksRef.current
     if (chunkIdx >= chunks.length) {
       finish()
+      onEndedRef.current?.()
       return
     }
     const chunk = chunks[chunkIdx]
