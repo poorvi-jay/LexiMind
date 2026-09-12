@@ -10,6 +10,7 @@ import WordDisplay from '../components/WordDisplay.jsx'
 import { api } from '../utils/api'
 import {
   normalizeWord, pageLayout, pagesFromPdf, pagesFromText, searchTerms, splitWords,
+  syllableKey,
 } from '../utils/document'
 import { usePrefs } from '../context/PreferencesContext'
 import { useTTSPlayer } from '../hooks/useTTSPlayer'
@@ -41,6 +42,8 @@ export default function ReadingPage() {
   const [isSimplifying, setIsSimplifying] = useState(false)
   const [isUploading, setIsUploading]     = useState(false)
   const [distractionFree, setDistraction] = useState(false)
+  const [syllableView, setSyllableView]   = useState(false)
+  const [syllableMap, setSyllableMap]     = useState({})  // cleaned word → syllables
 
   const [sourceType, setSourceType] = useState('paste')
   const sessionStartRef = useRef(null)
@@ -86,7 +89,8 @@ export default function ReadingPage() {
     prefetch(splitWords(pages[pageIndex + 1].text), speed, prefs.phrasePauses)
   }, [isPlaying, pageIndex, pages, speed, prefs.phrasePauses, prefetch])
 
-  /* ── Complexity of the current page (debounced while editing) ── */
+  /* ── Complexity of the current page — not shown to the reader (a difficulty
+     score can be discouraging); kept only for the session log / analytics ── */
   useEffect(() => {
     const text = currentText.trim()
     if (!text) return
@@ -94,10 +98,25 @@ export default function ReadingPage() {
     const id = setTimeout(() => {
       api.post('/reading/complexity', { text })
         .then(data => { if (!cancelled) setComplexity(data) })
-        .catch(() => { if (!cancelled) showToast('Could not calculate complexity.', 'warning') })
+        .catch(() => {})
     }, 500)
     return () => { cancelled = true; clearTimeout(id) }
-  }, [currentText, showToast])
+  }, [currentText])
+
+  /* ── Syllable breakdowns for the current page (only while the view is on) ── */
+  useEffect(() => {
+    if (!syllableView || !words.length) return
+    const missing = [...new Set(words.map(syllableKey).filter(Boolean))]
+      .filter(w => !(w in syllableMap))
+    if (!missing.length) return
+    let cancelled = false
+    api.post('/reading/syllabify', { words: missing })
+      .then(data => { if (!cancelled) setSyllableMap(prev => ({ ...prev, ...data.results })) })
+      .catch(() => {
+        if (!cancelled) showToast('Could not load syllable breakdown.', 'warning')
+      })
+    return () => { cancelled = true }
+  }, [syllableView, words, syllableMap, showToast])
 
   /* ── Classify words not yet labelled, across all pages (debounced) ── */
   useEffect(() => {
@@ -342,20 +361,6 @@ export default function ReadingPage() {
     changeSpeed(nextSpeed)
   }
 
-  const classifierHardWordPct = useMemo(() => {
-    if (words.length === 0) return null
-    const cleaned = words.map(normalizeWord).filter(Boolean)
-    if (!cleaned.length || !cleaned.every(w => w in classifiedWords)) return null
-    const hardCount = cleaned.filter(w => classifiedWords[w] === 'Hard').length
-    return Math.round((hardCount / cleaned.length) * 100)
-  }, [words, classifiedWords])
-
-  const displayedComplexity = useMemo(() => {
-    if (!complexity || !currentText.trim()) return null
-    if (classifierHardWordPct === null) return complexity
-    return { ...complexity, hard_word_pct: classifierHardWordPct }
-  }, [complexity, classifierHardWordPct, currentText])
-
   /* ── Keyboard: Escape leaves focus mode; ← / → change page ── */
   useEffect(() => {
     function handleKeyDown(e) {
@@ -392,6 +397,8 @@ export default function ReadingPage() {
         onWordClick={handleWordClick}
         focusRulerEnabled={prefs.focusRuler}
         searchTerms={activeSearchTerms}
+        syllableView={syllableView}
+        syllableMap={syllableMap}
       />
       <ReadingProgress
         activeIndex={activeIndex}
@@ -627,7 +634,12 @@ export default function ReadingPage() {
                   </div>
                 </div>
 
-                {displayedComplexity && <ComplexityBadge complexity={displayedComplexity} />}
+                {complexity && currentText.trim() && (
+                  <ComplexityBadge
+                    complexity={complexity}
+                    title={isMultiPage ? `Page ${currentPage.number}` : 'This text'}
+                  />
+                )}
 
                 {pageSimplified && (
                   <div
@@ -635,8 +647,8 @@ export default function ReadingPage() {
                                 text-xs text-purple-800
                                 dark:border-purple-900 dark:bg-purple-950/40 dark:text-purple-200"
                   >
-                    Hard words reduced from {pageSimplified.original_hard_word_pct}%
-                    to {pageSimplified.simplified_hard_word_pct}%.
+                    This page has been rewritten in simpler words. Use Restore to
+                    bring back the original.
                   </div>
                 )}
               </aside>
@@ -701,6 +713,19 @@ export default function ReadingPage() {
               ⏹ Stop
             </button>
 
+            {/* Syllable view toggle */}
+            <button
+              type="button"
+              onClick={() => setSyllableView(!syllableView)}
+              aria-pressed={syllableView}
+              className={`rounded-xl border px-4 py-2 text-xs font-semibold
+                ${syllableView
+                  ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/50 dark:text-blue-200'
+                  : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'}`}
+            >
+              {syllableView ? '✓ Syl·la·bles' : 'Syl·la·bles'}
+            </button>
+
             {/* Focus toggle */}
             <button
               type="button"
@@ -763,7 +788,11 @@ export default function ReadingPage() {
       )}
 
       {/* Definition panel */}
-      <DefinitionPanel word={selectedWord} onClose={handleDefinitionClose} />
+      <DefinitionPanel
+        word={selectedWord}
+        onClose={handleDefinitionClose}
+        onPlayWord={playWord}
+      />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
     </main>

@@ -7,10 +7,10 @@ Also enriches /reading/define response with all meanings + syllable_count.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from backend.services import simplification_service
 from backend.routers.auth import get_current_user
-from backend.services.syllables import count_syllables
+from backend.services.syllables import clean_word, count_syllables, split_syllables
 from functools import lru_cache
 import httpx
 import nltk
@@ -48,6 +48,10 @@ class DefineRequest(BaseModel):
     word: str
 
 
+class SyllabifyRequest(BaseModel):
+    words: list[str] = Field(default_factory=list, max_length=5000)
+
+
 def _wordnet_meanings(word: str, max_per_pos: int = 3):
     """Meanings in the dictionaryapi.dev shape, or [] if WordNet lacks the word."""
     grouped = {}
@@ -63,7 +67,7 @@ def _wordnet_meanings(word: str, max_per_pos: int = 3):
     return [{"partOfSpeech": pos, "definitions": defs} for pos, defs in grouped.items()]
 
 
-def _build_definition(word, phonetic, meanings, syllable_count, source):
+def _build_definition(word, phonetic, meanings, syllable_count, source, syllable_parts):
     definition = next((d["definition"] for m in meanings for d in m["definitions"]), "")
     example = next(
         (d["example"] for m in meanings for d in m["definitions"] if d.get("example")), ""
@@ -75,6 +79,7 @@ def _build_definition(word, phonetic, meanings, syllable_count, source):
         "example": example,
         "syllable_count": syllable_count,
         "syllables": syllable_count,       # kept for backward compat
+        "syllable_parts": syllable_parts,  # ["chlo", "ro", "plasts"]
         "meanings": meanings,              # full meanings for AC-34
         "source": source,
     }
@@ -102,6 +107,25 @@ async def complexity(
     return await simplification_service.get_complexity(req.text)
 
 
+@router.post("/reading/syllabify")
+async def syllabify(
+    req: SyllabifyRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Syllable breakdown for a batch of words, so the reading page can show
+    a whole page at once instead of one request per word.
+    Returns { results: { "photosynthesis": ["pho","to","syn","the","sis"] } }
+    keyed by the cleaned (lowercase, punctuation-free) word."""
+    results = {}
+    for word in req.words:
+        key = clean_word(word)
+        if key and key not in results:
+            parts = split_syllables(word)
+            if parts:
+                results[key] = list(parts)
+    return {"results": results}
+
+
 @router.post("/reading/define")
 async def define_word(
     req: DefineRequest,
@@ -113,6 +137,7 @@ async def define_word(
 
     # ── Task 2: accurate syllable count ────────────────────────────
     syllable_count = count_syllables(word)
+    syllable_parts = list(split_syllables(word))
 
     # ── online dictionary (phonetics + richer data) ────────────────
     # dictionaryapi.dev is free and often slow or down, so keep the
@@ -133,7 +158,7 @@ async def define_word(
         meanings = _wordnet_meanings(word) or _wordnet_meanings(_wordnet().morphy(word) or word)
         if not meanings:
             raise HTTPException(404, "Definition not found. Try a different form of the word.")
-        return _build_definition(word, "", meanings, syllable_count, "wordnet")
+        return _build_definition(word, "", meanings, syllable_count, "wordnet", syllable_parts)
 
     # Extract phonetic
     phonetic = entry.get("phonetic", "")
@@ -150,4 +175,5 @@ async def define_word(
             defs_out.append(def_entry)
         meanings.append({"partOfSpeech": m.get("partOfSpeech", ""), "definitions": defs_out})
 
-    return _build_definition(word, phonetic, meanings, syllable_count, "dictionaryapi")
+    return _build_definition(word, phonetic, meanings, syllable_count, "dictionaryapi",
+                             syllable_parts)

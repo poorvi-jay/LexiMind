@@ -124,6 +124,19 @@ body.dark {
   color: #dbeafe;
 }
 
+/* Syllable view — faint dot between syllables */
+.syllable-sep {
+  color: #2563eb;
+  opacity: 0.55;
+  padding: 0 0.12em;
+  font-weight: 400;
+}
+
+.dark .syllable-sep {
+  color: #93c5fd;
+  opacity: 0.7;
+}
+
 /* Paragraph spacing inside the reading panel */
 .reading-paragraph + .reading-paragraph {
   margin-top: 1em;

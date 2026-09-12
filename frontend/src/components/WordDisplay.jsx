@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 
+import { splitWordBySyllables, syllableKey } from '../utils/document'
+
 /**
  * Renders words as clickable tokens with:
  *  - Current word highlight (active)
@@ -18,6 +20,8 @@ export default function WordDisplay({
   focusRulerEnabled,
   paragraphStarts = [0],   // word indices where each paragraph begins
   searchTerms = [],        // normalized search terms to outline
+  syllableView = false,    // show every word split into syllables
+  syllableMap = {},        // cleaned word → ["pho","to","syn","the","sis"]
 }) {
   const activeWordRef = useRef(null)
   const firstHitRef   = useRef(null)
@@ -219,7 +223,19 @@ export default function WordDisplay({
                         : `Play word ${word}`
                     }
                   >
-                    {word}
+                    {syllableView
+                      ? splitWordBySyllables(word, syllableMap[syllableKey(word)])
+                          .map((piece, p, all) => (
+                            <span key={p}>
+                              {/* no dot where the word already breaks itself
+                                  ("light-dependent") */}
+                              {p > 0 && /[a-z']$/i.test(all[p - 1]) && (
+                                <span className="syllable-sep" aria-hidden="true">·</span>
+                              )}
+                              {piece}
+                            </span>
+                          ))
+                      : word}
                   </button>
                 )
               })}

@@ -165,6 +165,58 @@ export function normalizeWord(word) {
   return String(word || '').toLowerCase().replace(/[^\w']/g, '')
 }
 
+/** Same cleaning rule as the backend's clean_word() — the key syllable
+ *  breakdowns are stored under ("Cells," → "cells"). */
+export function syllableKey(word) {
+  return String(word || '').toLowerCase().replace(/[^a-z']/g, '').replace(/^'+|'+$/g, '')
+}
+
+/**
+ * Map a syllable breakdown back onto the original token so capitals and
+ * punctuation survive: "Sunlight," + [sun, light] → ["Sun", "light,"].
+ * Returns [word] when there's no breakdown.
+ */
+export function splitWordBySyllables(word, syllables) {
+  const text = String(word || '')
+  if (!syllables || syllables.length < 2) return [text]
+
+  const key = syllableKey(text)
+  if (key.length !== syllables.join('').length) return [text]
+
+  const pieces = []
+  let current = ''
+  let keyIndex = 0          // position within the cleaned word
+  let syllableIndex = 0
+  let remaining = syllables[0].length
+
+  for (const char of text) {
+    current += char
+    if (keyIndex < key.length && char.toLowerCase() === key[keyIndex]) {
+      keyIndex++
+      remaining--
+      // Close this syllable, but keep trailing punctuation with it.
+      if (remaining === 0 && syllableIndex < syllables.length - 1) {
+        pieces.push(current)
+        current = ''
+        syllableIndex++
+        remaining = syllables[syllableIndex].length
+      }
+    }
+  }
+  if (current) pieces.push(current)
+
+  // Punctuation between syllables belongs to the piece before it
+  // ("Es|tates|-Gen" → "Es|tates-|Gen").
+  for (let i = 1; i < pieces.length; i++) {
+    const lead = pieces[i].match(/^[^a-z']+/i)
+    if (lead) {
+      pieces[i - 1] += lead[0]
+      pieces[i] = pieces[i].slice(lead[0].length)
+    }
+  }
+  return pieces.filter(Boolean).length ? pieces.filter(Boolean) : [text]
+}
+
 /** Normalized search terms of a query ("Calvin cycle!" → ["calvin", "cycle"]). */
 export function searchTerms(query) {
   return splitWords(query).map(normalizeWord).filter(Boolean)
