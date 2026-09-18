@@ -1,17 +1,3 @@
-"""
-NLP Router — Owner: M2
-Exposes POST /nlp/check (F26-F28) and POST /nlp/predict (F29).
-
-STATUS:
-- /nlp/check: grammar (F27), phonetic spelling (F26), and
-  homophone detection (F28) all implemented.
-- /nlp/predict: word/phrase prediction (F29) implemented via
-  local DistilGPT-2.
-- Both endpoints now require authentication (Day 8 retrofit,
-  Task 9) via Depends(get_current_user). Built unauthenticated
-  first per Build Guide Section 9, retrofitted once Auth existed.
-"""
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from backend.services.prediction_service import predict_words, predict_phrase
@@ -46,7 +32,7 @@ class PredictResponse(BaseModel):
 
 
 @router.post("/check", response_model=CheckResponse)
-async def check(req: CheckRequest, current_user: User = Depends(get_current_user)):
+def check(req: CheckRequest, current_user: User = Depends(get_current_user)):
     """
     Run grammar, phonetic spelling, and homophone checks on the
     given text. Response shape per PRD Section 3 contract:
@@ -54,6 +40,14 @@ async def check(req: CheckRequest, current_user: User = Depends(get_current_user
 
     Now requires authentication (Day 8 retrofit) — a valid Bearer
     token must be provided.
+
+    Plain `def`, not `async def` (B2 fix): the body does blocking
+    CPU/subprocess work (spaCy parsing, a LanguageTool Java
+    round-trip) with no awaits. As `async def` this blocked the
+    entire event loop — every other request, for every user —
+    for the duration of the call. FastAPI runs a plain `def`
+    endpoint in a worker thread instead, keeping the event loop
+    free.
     """
     doc = spacy_nlp(req.text)
     return {
@@ -64,16 +58,19 @@ async def check(req: CheckRequest, current_user: User = Depends(get_current_user
 
 
 @router.post("/predict", response_model=PredictResponse)
-async def predict(req: PredictRequest, current_user: User = Depends(get_current_user)):
+def predict(req: PredictRequest, current_user: User = Depends(get_current_user)):
     """
     Generate word/phrase completions for the given text prefix.
     Response shape per PRD contract: { suggestions[3], phrase_suggestion }
 
     Now requires authentication (Day 8 retrofit) — a valid Bearer
     token must be provided.
+
+    Plain `def`, not `async def` (B2 fix): DistilGPT-2's
+    model.generate() is blocking, synchronous CPU work with no
+    awaits — same reasoning as check() above.
     """
     return {
         "suggestions": predict_words(req.prefix),
         "phrase_suggestion": predict_phrase(req.prefix),
     }
-
