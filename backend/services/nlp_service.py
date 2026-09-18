@@ -161,13 +161,35 @@ _DISAMBIGUATORS = {}
 
 
 def _disambiguate_there(token):
-    """their/there/they're — reliable POS rule."""
+    """
+    their / there / they're.
+
+    Order matters. The expletive check comes first: in existential
+    sentences ("There is a problem", "There are many books") the
+    token after "there" is a verb, so the VERB/AUX branch below would
+    otherwise fire and suggest "they're" — telling the user to write
+    "They're is a problem." spaCy tags this "there" with dep_ == "expl",
+    which is exactly the signal needed to catch it before the verb
+    branch ever runs. (Found in code review, B1.)
+    """
+    if token.dep_ == "expl":
+        return "there"
+
     next_tok = token.doc[token.i + 1] if token.i + 1 < len(token.doc) else None
-    if next_tok is not None and next_tok.pos_ in ("NOUN", "PROPN"):
-        return "their"     # possessive determiner before a noun
-    if next_tok is not None and next_tok.pos_ in ("VERB", "AUX"):
-        return "they're"   # contraction before a verb
-    return "there"          # default: locative/existential ("over there", "there is")
+
+    if next_tok is None:
+        return token.text.lower()
+
+    if next_tok.pos_ in ("NOUN", "PROPN") and next_tok.dep_ != "npadvmod":
+        return "their"
+
+    if next_tok.lemma_ in ("be", "have", "do"):
+        return "there"
+
+    if next_tok.pos_ in ("VERB", "AUX"):
+        return "they're"
+
+    return "there"
 
 
 for _w in ["there", "their", "they're"]:
@@ -177,19 +199,28 @@ for _w in ["there", "their", "they're"]:
 def _disambiguate_to(token):
     """to/too/two — POS rule. Defaults to 'to' since it's the most
     frequent of the three; only flags 'too'/'two' on clear signal."""
-    next_tok = token.doc[token.i + 1] if token.i + 1 < len(token.doc) else None
+    doc = token.doc
+    next_tok = doc[token.i + 1] if token.i + 1 < len(doc) else None
+    next_next_tok = doc[token.i + 2] if token.i + 2 < len(doc) else None
 
     if token.like_num:
-        return "two"                                    # "two" (word-form number)
+        return "two"
     if next_tok is not None and next_tok.pos_ == "VERB":
-        return "to"                                       # infinitive: "to go"
+        return "to"
     if next_tok is not None and next_tok.pos_ == "ADJ":
-        return "too"                                       # intensifier: "too tired"
+        # "too tired" (intensifier) vs "to different subjects"
+        # (preposition + adjective + noun). An intensifier "too"
+        # is not itself followed by a noun right after the
+        # adjective — that pattern means "to" is a preposition
+        # modifying an upcoming noun phrase, not an intensifier.
+        if next_next_tok is not None and next_next_tok.pos_ in ("NOUN", "PROPN"):
+            return "to"
+        return "too"
     if next_tok is not None and next_tok.pos_ in ("NOUN", "PROPN", "DET", "PRON"):
-        return "to"                                         # preposition + noun phrase (incl. through a determiner): "to the store"
+        return "to"
     if next_tok is None or next_tok.is_punct:
-        return "too"                                        # adverb at clause end: "I want to go too."
-    return "to"                                              # safe default — "to" is statistically far more common
+        return "too"
+    return "to"
 
 
 for _w in ["to", "too", "two"]:
