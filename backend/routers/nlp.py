@@ -7,7 +7,7 @@ from backend.services.nlp_service import (
     check_grammar,
     check_phonetic,
     check_homophones,
-    nlp as spacy_nlp,
+    get_nlp,
 )
 
 router = APIRouter(prefix="/nlp", tags=["NLP"])
@@ -49,7 +49,7 @@ def check(req: CheckRequest, current_user: User = Depends(get_current_user)):
     endpoint in a worker thread instead, keeping the event loop
     free.
     """
-    doc = spacy_nlp(req.text)
+    doc = get_nlp()(req.text)
     return {
         "spelling": check_phonetic(req.text),
         "grammar": check_grammar(req.text),

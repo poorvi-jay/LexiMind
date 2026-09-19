@@ -1,22 +1,25 @@
-"""
-NLP Service — Owner: M2
-Handles grammar correction (F27), phonetic spell correction (F26),
-and homophone detection (F28).
-
-STATUS:
-- Grammar correction (F27): IMPLEMENTED (Task 2)
-- Phonetic spell correction (F26): IMPLEMENTED (Task 3)
-- Homophone detection (F28): NOT YET IMPLEMENTED (Task 4)
-"""
 import spacy
 import language_tool_python
 import jellyfish
+from functools import lru_cache
 from wordfreq import zipf_frequency
 
-nlp=spacy.load("en_core_web_sm")
 
-tool = language_tool_python.LanguageTool('en-US')
+@lru_cache(maxsize=1)
+def get_nlp():
+    """Lazy-load spaCy's en_core_web_sm pipeline on first use (B3).
+    Previously loaded at import time, so every backend startup paid
+    this cost even if nobody opened the Writing page that session."""
+    return spacy.load("en_core_web_sm")
 
+
+@lru_cache(maxsize=1)
+def get_tool():
+    """Lazy-load LanguageTool on first use (B3). LanguageTool starts a
+    Java subprocess; loading it at import time meant a missing/broken
+    Java install crashed the ENTIRE backend at startup, not just this
+    one feature."""
+    return language_tool_python.LanguageTool('en-US')
 
 DYSLEXIC_WORDLIST = [
     "because", "beautiful", "friend", "people", "there", "their",
@@ -44,7 +47,7 @@ def check_grammar(text: str) -> list[dict]:
     if not text or not text.strip():
         return []
 
-    matches = tool.check(text)
+    matches = get_tool().check(text)
 
     return [
         {

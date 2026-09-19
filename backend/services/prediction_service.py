@@ -1,18 +1,30 @@
 import re
-import torch
-from transformers import pipeline
+from functools import lru_cache
 
-predictor = pipeline("text-generation", model="distilgpt2")
-tokenizer = predictor.tokenizer
-model = predictor.model
+import torch
+
+
+@lru_cache(maxsize=1)
+def get_predictor():
+    """Lazy-load the DistilGPT-2 text-generation pipeline on first use
+    (B3). Previously loaded (~320MB model) at import time, so every
+    backend startup paid this cost even if nobody used Word Prediction
+    that session. The `transformers` import itself is also deferred
+    inside here for the same reason."""
+    from transformers import pipeline
+    return pipeline("text-generation", model="distilgpt2")
 
 
 def predict_words(prefix: str) -> list[str]:
 
     if not prefix or not prefix.strip():
         return []
-    
+
     prefix = prefix.rstrip()
+
+    predictor = get_predictor()
+    tokenizer = predictor.tokenizer
+    model = predictor.model
 
     input_ids = tokenizer(prefix, return_tensors="pt").input_ids
     input_len = input_ids.shape[1]
@@ -60,6 +72,10 @@ def predict_phrase(prefix: str) -> str:
         return ""
 
     prefix = prefix.rstrip()
+
+    predictor = get_predictor()
+    tokenizer = predictor.tokenizer
+    model = predictor.model
 
     input_ids = tokenizer(prefix, return_tensors="pt").input_ids
     input_len = input_ids.shape[1]
