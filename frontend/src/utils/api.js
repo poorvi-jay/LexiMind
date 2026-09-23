@@ -17,7 +17,9 @@ async function request(method, path, body = null, isFormData = false) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(err.detail || 'Request failed')
+    const error = new Error(err.detail || 'Request failed')
+    error.status = res.status
+    throw error
   }
 
   return res.json()
@@ -28,5 +30,6 @@ export const api = {
   post: (path, body) => request('POST', path, body),
   postForm: (path, formData) => request('POST', path, formData, true),
   patch: (path, body) => request('PATCH', path, body),
+  put: (path, body) => request('PUT', path, body),
   delete: path => request('DELETE', path),
 }

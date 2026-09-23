@@ -160,6 +160,35 @@ async def save_document(
     return {"id": doc.id}
 
 
+@router.put("/documents/{doc_id}", response_model=SaveDocResponse)
+async def update_document(
+    doc_id: str,
+    req: SaveDocRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    B6 fix: update an existing named document in place, instead of
+    always inserting a new row. Scoped to current_user.id, same
+    pattern as every other document endpoint in this file - a
+    guessed/other user's doc_id returns 404, not another user's data.
+    """
+    doc = (
+        db.query(SavedDocument)
+        .filter(SavedDocument.id == doc_id, SavedDocument.user_id == current_user.id)
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    doc.title = req.title or doc.title
+    doc.content = req.content
+    doc.template = req.template
+    db.commit()
+    db.refresh(doc)
+    return {"id": doc.id}
+
+
 @router.get("/documents/{doc_id}", response_model=DocumentFull)
 async def get_document(
     doc_id: str,

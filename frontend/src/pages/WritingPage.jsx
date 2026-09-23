@@ -72,10 +72,12 @@ export default function WritingPage() {
   const predictDebounce = useRef(null)
   const textareaRef = useRef(null)
   const contentRef = useRef(content) // always-current content for the interval closure
+  const loadedDocIdRef = useRef(null) // always-current loaded-document id for the interval closure
   const [documents, setDocuments] = useState([])
   const [showDocs, setShowDocs] = useState(false)
   const [saveTitle, setSaveTitle] = useState('')
   const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [loadedDocId, setLoadedDocId] = useState(null) // id of the currently-open named document, or null (unsaved/new)
   const [isReading, setIsReading] = useState(false)
   const [readError, setReadError] = useState(null)
   const audioRef = useRef(null)
@@ -87,6 +89,10 @@ export default function WritingPage() {
   useEffect(() => {
     contentRef.current = content
   }, [content])
+
+  useEffect(() => {
+    loadedDocIdRef.current = loadedDocId
+  }, [loadedDocId])
 
   const resultsRef = useRef(results)
   useEffect(() => {
@@ -114,16 +120,38 @@ export default function WritingPage() {
   }, [isAuthenticated])
 
   // ── Auto-save every 30s, with retry (F31) ──
+
   useEffect(() => {
     if (!isAuthenticated) return
 
     async function saveWithRetry(retriesLeft = 3) {
       setSaveStatus('saving')
       try {
-        await api.patch('/writing/autosave', { content: contentRef.current })
+        // B6 follow-up: if a named document is currently open, keep
+        // autosaving into THAT document instead of the separate draft
+        // row - otherwise edits silently fork into the draft and the
+        // open document goes stale. No document open -> unchanged
+        // behaviour, autosave the draft as before.
+        if (loadedDocIdRef.current) {
+          await api.put(`/writing/documents/${loadedDocIdRef.current}`, {
+            title: saveTitle,
+            content: contentRef.current,
+          })
+        } else {
+          await api.patch('/writing/autosave', { content: contentRef.current })
+        }
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus(null), 2000)
       } catch (err) {
+        if (err.status === 404 && loadedDocIdRef.current) {
+          // Loaded document was deleted elsewhere. Retrying the same
+          // PUT would 404 every time - fall back to the draft instead
+          // of burning all 3 retries and losing 30s+ of typing.
+          loadedDocIdRef.current = null
+          setLoadedDocId(null)
+          saveWithRetry(retriesLeft)
+          return
+        }
         if (retriesLeft > 0) {
           setTimeout(() => saveWithRetry(retriesLeft - 1), 2000)
         } else {
@@ -134,7 +162,7 @@ export default function WritingPage() {
 
     const interval = setInterval(() => saveWithRetry(), 30000)
     return () => clearInterval(interval)
-  }, [isAuthenticated])
+  }, [isAuthenticated, saveTitle])
 
   // ── Log writing session on tab-close/hide (F38, Task 4.8) ──
   useEffect(() => {
@@ -267,30 +295,68 @@ export default function WritingPage() {
   async function handleSaveAs() {
     if (!saveTitle.trim()) return
 
-    const duplicate = documents.some(
-      doc => doc.title.toLowerCase() === saveTitle.trim().toLowerCase()
-    )
-    if (duplicate && !window.confirm(
-      `A document named "${saveTitle}" already exists. Save as a separate copy anyway?`
-    )) {
-      return
+    // Only warn about a duplicate title when this save would create a
+    // NEW row. Updating the document that's already open is expected
+    // to keep matching its own title - that's not a duplicate.
+    if (!loadedDocId) {
+      const duplicate = documents.some(
+        doc => doc.title.toLowerCase() === saveTitle.trim().toLowerCase()
+      )
+      if (duplicate && !window.confirm(
+        `A document named "${saveTitle}" already exists. Save as a separate copy anyway?`
+      )) {
+        return
+      }
     }
 
+    setSaveStatus('saving')
     try {
-      await api.post('/writing/documents', { title: saveTitle, content })
+      if (loadedDocId) {
+        await api.put(`/writing/documents/${loadedDocId}`, { title: saveTitle, content })
+      } else {
+        const result = await api.post('/writing/documents', { title: saveTitle, content })
+        setLoadedDocId(result.id)
+      }
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus(null), 2000)
       setSaveTitle('')
       setShowSaveDialog(false)
       loadDocuments()
-    } catch {
-      /* could add error UI here later */
+    } catch (err) {
+      if (loadedDocId && err.status === 404) {
+        // The loaded document no longer exists - most likely deleted
+        // from My Documents while still open here. Retrying the same
+        // update would just 404 again, so offer to save as new instead
+        // of just reporting failure.
+        if (window.confirm(
+          'This document no longer exists (it may have been deleted). Save as a new document instead?'
+        )) {
+          try {
+            const result = await api.post('/writing/documents', { title: saveTitle, content })
+            setLoadedDocId(result.id)
+            setSaveStatus('saved')
+            setTimeout(() => setSaveStatus(null), 2000)
+            setSaveTitle('')
+            setShowSaveDialog(false)
+            loadDocuments()
+          } catch {
+            setSaveStatus('error')
+          }
+          return
+        }
+      }
+      setSaveStatus('error')
     }
   }
+  
 
   async function handleLoadDocument(docId) {
     try {
       const doc = await api.get(`/writing/documents/${docId}`)
       setContent(doc.content)
       setActiveTemplate(null) // loading a real saved document exits "template mode"
+      setLoadedDocId(docId)
+      setSaveTitle(doc.title)
       setShowDocs(false)
     } catch {
       /* could add error UI here later */
@@ -359,6 +425,8 @@ export default function WritingPage() {
     }
     setContent('')
     setActiveTemplate(null)
+    setLoadedDocId(null)
+    setSaveTitle('')
     try {
       await api.patch('/writing/autosave', { content: '' })
     } catch {
