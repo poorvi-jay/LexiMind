@@ -99,8 +99,10 @@ export default function WritingPage() {
     resultsRef.current = results
   }, [results])
 
+  // B9: load the list on mount (and when the panel opens) so the
+  // duplicate-title check in handleSaveAs always has real data
   useEffect(() => {
-    if (showDocs && isAuthenticated) loadDocuments()
+    if (isAuthenticated) loadDocuments()
   }, [showDocs, isAuthenticated])
 
   useEffect(() => {
