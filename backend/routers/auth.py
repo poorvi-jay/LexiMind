@@ -29,6 +29,12 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
 SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    # B8: fail at startup with a clear message, not at the first login
+    raise RuntimeError(
+        "SECRET_KEY is not set. Add it to backend/.env "
+        "(generate one with: python -c \"import secrets; print(secrets.token_hex(32))\")"
+    )
 ALGORITHM = "HS256"
 
 
