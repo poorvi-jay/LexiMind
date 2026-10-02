@@ -61,5 +61,11 @@ export function useAuthState() {
     setUser(null)
   }, [])
 
+  // B5: api.js fires 'auth-expired' when the server rejects our token
+  useEffect(() => {
+    window.addEventListener('auth-expired', logout)
+    return () => window.removeEventListener('auth-expired', logout)
+  }, [logout])
+
   return { token, user, error, login, register, logout, isAuthenticated: !!token }
 }
