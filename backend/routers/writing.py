@@ -129,12 +129,14 @@ async def list_documents(
     """F32: List all of the user's saved documents, most recent first."""
     docs = (
         db.query(SavedDocument)
-        .filter(SavedDocument.user_id == current_user.id)
+        .filter(
+            SavedDocument.user_id == current_user.id,
+            SavedDocument.is_draft.is_not(True),
+        )
         .order_by(SavedDocument.updated_at.desc())
         .all()
     )
     return docs
-
 
 @router.post("/documents", response_model=SaveDocResponse)
 async def save_document(
