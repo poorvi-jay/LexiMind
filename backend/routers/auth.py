@@ -1,13 +1,14 @@
 """
 Auth Router — Owner: M2 (F01-F04)
-Exposes /auth/register, /auth/login, /auth/me, /auth/preferences.
+Exposes /auth/register, /auth/login, /auth/me, /auth/me/preferences.
 
 STATUS:
 - /auth/register (F01): IMPLEMENTED (Task 7)
 - /auth/login (F02): IMPLEMENTED (Task 7)
 - /auth/me (F03): IMPLEMENTED (Task 8)
-- /auth/preferences (F04): IMPLEMENTED (Task 8)
+- /auth/me/preferences (F04): IMPLEMENTED (Task 8)
 """
+
 import os
 from datetime import datetime, timedelta
 
