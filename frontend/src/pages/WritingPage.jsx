@@ -233,8 +233,11 @@ export default function WritingPage() {
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [loadedDocId, setLoadedDocId] = useState(null) // id of the currently-open named document, or null (unsaved/new)
   const [isReading, setIsReading] = useState(false)
+  const [isReadPaused, setIsReadPaused] = useState(false)
+  const [isReadLoading, setIsReadLoading] = useState(false)
   const [readError, setReadError] = useState(null)
   const audioRef = useRef(null)
+  const readRequestRef = useRef(0)
   const [showTemplates, setShowTemplates] = useState(false)
   const [activeTemplate, setActiveTemplate] = useState(
     () => localStorage.getItem('leximind-active-template') || null
@@ -598,52 +601,140 @@ export default function WritingPage() {
     }
   }
 
+  function releaseReadAudio() {
+    const audio = audioRef.current
+    if (!audio) return
+
+    audio.onended = null
+    audio.onerror = null
+    audio.pause()
+
+    if (audio.src) {
+      URL.revokeObjectURL(audio.src)
+    }
+
+    audioRef.current = null
+  }
+
+  useEffect(() => {
+    return () => {
+      // B21: invalidate any pending TTS request and release the final
+      // audio Blob URL when the Writing page unmounts.
+      readRequestRef.current += 1
+      releaseReadAudio()
+    }
+  }, [])
+
   async function playText(text) {
     if (!text.trim()) return
 
+    const requestId = ++readRequestRef.current
+
+    releaseReadAudio()
     setReadError(null)
-    setIsReading(true)
+    setIsReadLoading(true)
+    setIsReading(false)
+    setIsReadPaused(false)
+
     try {
       const data = await api.post('/tts/generate', { text })
+
+      // The page may have unmounted or another reading may have started.
+      if (requestId !== readRequestRef.current) return
+
       const byteChars = atob(data.audio_b64)
       const byteNumbers = new Array(byteChars.length)
       for (let i = 0; i < byteChars.length; i++) {
         byteNumbers[i] = byteChars.charCodeAt(i)
       }
+
       const byteArray = new Uint8Array(byteNumbers)
       const blob = new Blob([byteArray], { type: 'audio/mpeg' })
       const url = URL.createObjectURL(blob)
 
-      if (audioRef.current) {
-        audioRef.current.pause()
-        URL.revokeObjectURL(audioRef.current.src)
-      }
-
       const audio = new Audio(url)
       audioRef.current = audio
-      audio.onended = () => setIsReading(false)
+
+      audio.onended = () => {
+        if (audioRef.current !== audio) return
+        URL.revokeObjectURL(url)
+        audioRef.current = null
+        setIsReading(false)
+        setIsReadPaused(false)
+        setIsReadLoading(false)
+      }
+
       audio.onerror = () => {
+        if (audioRef.current !== audio) return
+        URL.revokeObjectURL(url)
+        audioRef.current = null
         setReadError('Could not play audio.')
         setIsReading(false)
+        setIsReadPaused(false)
+        setIsReadLoading(false)
       }
+
+      setIsReadLoading(false)
       await audio.play()
+
+      if (requestId !== readRequestRef.current || audioRef.current !== audio) {
+        audio.pause()
+        URL.revokeObjectURL(url)
+        if (audioRef.current === audio) {
+          audioRef.current = null
+        }
+        return
+      }
+
+      setIsReading(true)
+      setIsReadPaused(false)
     } catch (err) {
+      if (requestId !== readRequestRef.current) return
+
+      releaseReadAudio()
       setReadError('Could not read text right now.')
       setIsReading(false)
+      setIsReadPaused(false)
+      setIsReadLoading(false)
     }
   }
 
   async function handleReadBack() {
+    if (isReadLoading) return
+
+    if (isReading && audioRef.current) {
+      audioRef.current.pause()
+      setIsReading(false)
+      setIsReadPaused(true)
+      return
+    }
+
+    if (isReadPaused && audioRef.current) {
+      try {
+        await audioRef.current.play()
+        setIsReading(true)
+        setIsReadPaused(false)
+      } catch {
+        setReadError('Could not resume audio.')
+        releaseReadAudio()
+        setIsReading(false)
+        setIsReadPaused(false)
+      }
+      return
+    }
+
     const el = getEditor()
     if (!el) {
       setReadError('Select some text first to read it back.')
       return
     }
+
     const selected = el.value.slice(el.selectionStart, el.selectionEnd)
     if (!selected.trim()) {
       setReadError('Select some text first to read it back.')
       return
     }
+
     playText(selected)
   }
 
@@ -750,12 +841,18 @@ export default function WritingPage() {
         </button>
         <button
           onClick={handleReadBack}
-          disabled={isReading}
+          disabled={isReadLoading}
           className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm font-medium
                     text-gray-700 hover:bg-gray-50 disabled:opacity-50
                     dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
         >
-          {isReading ? 'Reading...' : 'Read Selection'}
+          {isReadLoading
+            ? 'Loading...'
+            : isReading
+              ? 'Pause'
+              : isReadPaused
+                ? 'Resume'
+                : 'Read Selection'}
         </button>
         <button
           onClick={() => setShowTemplates(v => !v)}
