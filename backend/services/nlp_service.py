@@ -329,9 +329,12 @@ def check_phonetic(text: str) -> list[dict]:
     results = []
 
     words = text.split()
+    search_start=0
 
     for i, raw_word in enumerate(words):
-
+        position = text.find(raw_word, search_start)
+        search_start = position + len(raw_word)
+        
         stripped = raw_word.strip(
             ".,!?;:\"'"
         )
@@ -379,7 +382,7 @@ def check_phonetic(text: str) -> list[dict]:
             results.append({
                 "word": raw_word,
                 "suggestion": suggestion,
-                "position": i,
+                "position": position,
             })
 
     return results
@@ -668,7 +671,7 @@ def check_homophones(
                 results.append({
                     "word": token.text,
                     "suggestion": correct_word,
-                    "position": token.i,
+                    "position": token.idx,
                 })
 
         # Non-disambiguated groups are not automatically
