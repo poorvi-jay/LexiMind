@@ -1,6 +1,7 @@
 """
 TEMPORARY DATABASE MODELS — Owner: M2
-====================================
+=====================================
+
 This file is a STOPGAP, not the final schema.
 
 Per Build Guide Section 4.1: this holds a minimal `users` table
@@ -15,10 +16,22 @@ eventually migrate to Postgres.
 
 STATUS: IMPLEMENTED (Task 6) — users table + SQLite connection.
 """
+
 import os
 import uuid
 import datetime
-from sqlalchemy import Column, String, Boolean, Integer, DateTime, Float, Date, UniqueConstraint, create_engine
+
+from sqlalchemy import (
+    Column,
+    String,
+    Boolean,
+    Integer,
+    DateTime,
+    Float,
+    Date,
+    UniqueConstraint,
+    create_engine,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -31,7 +44,10 @@ class User(Base):
     name = Column(String(100))
     email = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
 
     # Preference columns — mirrors M1's accessibility settings so
     # Auth (F03/F04) can persist them server-side instead of
@@ -42,6 +58,7 @@ class User(Base):
     pref_font_size = Column(Integer, default=18)
     pref_dark_mode = Column(Boolean, default=False)
 
+
 class SavedDocument(Base):
     __tablename__ = "saved_documents"
 
@@ -50,8 +67,15 @@ class SavedDocument(Base):
     title = Column(String(150), default="Untitled Draft")
     content = Column(String(50000), default="")
     template = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+    )
     is_draft = Column(Boolean, default=False)
 
 
@@ -60,7 +84,10 @@ class WritingSession(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, nullable=False, index=True)
-    date = Column(DateTime, default=datetime.datetime.utcnow)
+    date = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
     word_count = Column(Integer, default=0)
     spell_error_count = Column(Integer, default=0)
     grammar_error_count = Column(Integer, default=0)
@@ -73,7 +100,10 @@ class ReadingSession(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, nullable=False, index=True)
-    date = Column(DateTime, default=datetime.datetime.utcnow)
+    date = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
     wpm = Column(Float)
     total_words = Column(Integer)
     hard_word_count = Column(Integer)
@@ -83,6 +113,7 @@ class ReadingSession(Base):
     simplified = Column(Boolean)
     complexity_score = Column(Float)
 
+
 class WordRepeatLog(Base):
     __tablename__ = "word_repeat_log"
 
@@ -91,7 +122,11 @@ class WordRepeatLog(Base):
     word = Column(String(100))
     repeat_count = Column(Integer, default=0)
     difficulty_label = Column(String(10))
-    last_seen = Column(DateTime, default=datetime.datetime.utcnow)
+    last_seen = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
 
 class WordBank(Base):
     __tablename__ = "word_bank"
@@ -106,17 +141,33 @@ class WordBank(Base):
     next_review = Column(Date)
     total_drills = Column(Integer, default=0)
     last_quality = Column(Integer)
-    added_at = Column(DateTime, default=datetime.datetime.utcnow)
-    __table_args__ = (UniqueConstraint('user_id', 'word', name='uq_wordbank_user_word'),)
+    added_at = Column(
+        DateTime,
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "word",
+            name="uq_wordbank_user_word",
+        ),
+    )
 
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _DB_PATH = os.path.join(_BASE_DIR, "dev.db")
 
 engine = create_engine(
-    f"sqlite:///{_DB_PATH}", connect_args={"check_same_thread": False}
+    f"sqlite:///{_DB_PATH}",
+    connect_args={"check_same_thread": False},
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+)
 
 
 def init_db():
