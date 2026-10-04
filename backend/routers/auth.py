@@ -86,12 +86,15 @@ def create_access_token(user_id: str) -> str:
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False) #note: auto_error=False allows us to handle missing tokens gracefully in get_current_user
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+
     token = credentials.credentials
     """
     Shared dependency for ALL protected routes in the project.
