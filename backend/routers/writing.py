@@ -1,17 +1,21 @@
 """
-Writing Router — Owner: M2 (F25, F31, F32, F48)
-Exposes /writing/autosave (F31), /writing/documents CRUD (F32),
-and /writing/template-used (F48).
+Writing Router
+==============
 
-STATUS:
-- /writing/autosave (F31): IMPLEMENTED (Task 14)
-- /writing/documents CRUD (F32): IMPLEMENTED (Task 15)
-- /writing/template-used (F48): IMPLEMENTED (Task 18)
+Provides the writing-related API endpoints for autosave, saved
+document CRUD operations, and template usage tracking.
 
-Design note: autosave maintains ONE "current draft" row per user in
-saved_documents, explicitly flagged via is_draft=True. Named saves
-(via Save As) are always created with is_draft=False, so autosave
-can never touch them.
+Endpoints:
+- /writing/autosave: Manage the user's current writing draft.
+- /writing/documents: Create, list, update, and delete saved documents.
+- /writing/template-used: Record template usage.
+
+Design note: autosave maintains one current draft row per user in
+saved_documents, identified by is_draft=True. Named saves created
+through Save As use is_draft=False and are kept separate from the
+autosave draft.
+
+STATUS: ACTIVE
 """
 from datetime import datetime
 

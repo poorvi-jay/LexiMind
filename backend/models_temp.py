@@ -1,20 +1,15 @@
 """
-TEMPORARY DATABASE MODELS — Owner: M2
-=====================================
+DATABASE MODELS
+===============
 
-This file is a STOPGAP, not the final schema.
+This module contains the SQLAlchemy models used by LexiMind,
+including users, saved documents, writing sessions, reading
+sessions, and word-repeat logs.
 
-Per Build Guide Section 4.1: this holds a minimal `users` table
-(email, password hash, pref_* columns) so Authentication isn't
-blocked while waiting for the real 6-table schema (PRD Section 4).
+The models currently use SQLite for local development and are
+designed to support the planned PostgreSQL migration.
 
-When the full schema lands, this file's `User` model gets merged
-into it and this file is deleted. Do not build permanent
-functionality on top of it without expecting that migration.
-Avoid SQLite-specific raw SQL anywhere in the app, since this will
-eventually migrate to Postgres.
-
-STATUS: IMPLEMENTED (Task 6) — users table + SQLite connection.
+STATUS: ACTIVE
 """
 
 import os

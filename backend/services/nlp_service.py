@@ -1,3 +1,17 @@
+"""
+NLP Service
+===========
+
+Provides the NLP functionality used by the LexiMind writing page,
+including grammar checking, phonetic spell correction, homophone
+detection, and word/phrase analysis.
+
+The service uses lazy-loaded NLP resources and local vocabulary
+data to support writing assistance.
+
+STATUS: ACTIVE
+"""
+
 import spacy
 import language_tool_python
 import jellyfish
