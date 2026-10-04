@@ -200,29 +200,46 @@ for _w in ["there", "their", "they're"]:
 
 
 def _disambiguate_to(token):
-    """to/too/two — POS rule. Defaults to 'to' since it's the most
-    frequent of the three; only flags 'too'/'two' on clear signal."""
+    """to/too/two — POS/context rule."""
+
     doc = token.doc
     next_tok = doc[token.i + 1] if token.i + 1 < len(doc) else None
     next_next_tok = doc[token.i + 2] if token.i + 2 < len(doc) else None
 
+    word = token.text.lower()
+
+    # too/two at the end of a question such as
+    # "Who are you talking too?" / "Who are you talking two?"
+    # should be "to".
+    if word in ("too", "two") and next_tok is not None and next_tok.is_punct:
+        sentence_start = token.sent.start
+        first_word = doc[sentence_start].text.lower()
+
+        if first_word in ("who", "what", "where", "when", "why", "which", "whom"):
+            return "to"
+
+    # "two" is normally correct when used as a number.
     if token.like_num:
         return "two"
+
+    # "to" tagged as a preposition should remain "to".
+    if token.pos_ == "ADP":
+        return "to"
+
     if next_tok is not None and next_tok.pos_ == "VERB":
         return "to"
+
     if next_tok is not None and next_tok.pos_ == "ADJ":
-        # "too tired" (intensifier) vs "to different subjects"
-        # (preposition + adjective + noun). An intensifier "too"
-        # is not itself followed by a noun right after the
-        # adjective — that pattern means "to" is a preposition
-        # modifying an upcoming noun phrase, not an intensifier.
         if next_next_tok is not None and next_next_tok.pos_ in ("NOUN", "PROPN"):
             return "to"
         return "too"
+
     if next_tok is not None and next_tok.pos_ in ("NOUN", "PROPN", "DET", "PRON"):
         return "to"
+
     if next_tok is None or next_tok.is_punct:
         return "too"
+
     return "to"
 
 
