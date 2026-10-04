@@ -61,6 +61,21 @@ export function useAuthState() {
     setUser(null)
   }, [])
 
+  useEffect(() => {
+  if (!token) return
+
+  const fetchCurrentUser = async () => {
+    try {
+      const currentUser = await api.get('/auth/me')
+      setUser(currentUser)
+    } catch {
+      // Keep cached user if request fails.
+    }
+  }
+
+  fetchCurrentUser()
+  }, [token])
+
   // B5: api.js fires 'auth-expired' when the server rejects our token
   useEffect(() => {
     window.addEventListener('auth-expired', logout)
