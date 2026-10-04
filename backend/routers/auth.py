@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from jose import jwt
@@ -41,7 +41,7 @@ ALGORITHM = "HS256"
 class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
-    password: str
+    password: str =Field(min_length=8)
 
 
 class LoginRequest(BaseModel):
