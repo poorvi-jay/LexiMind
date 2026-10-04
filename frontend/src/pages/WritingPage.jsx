@@ -870,6 +870,7 @@ export default function WritingPage() {
             type="text"
             value={saveTitle}
             onChange={e => setSaveTitle(e.target.value)}
+            maxLength={150}
             placeholder="Document title..."
             className="flex-1 rounded-xl border border-gray-200 p-2 text-sm
                       dark:border-gray-700 dark:bg-[#1E1E1E] dark:text-white"

@@ -41,6 +41,7 @@ export default function LoginPage() {
             type="text"
             placeholder="Name"
             value={name}
+            maxLength={100}
             onChange={(e) => setName(e.target.value)}
             required
             className="w-full rounded-xl border border-gray-200 p-3 dark:border-gray-800 dark:bg-[#1E1E1E] dark:text-white"

@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -42,7 +42,7 @@ class ReadingSessionCreate(BaseModel):
     hard_word_count: int
     repeat_count: int = 0
     duration_seconds: int
-    source_type: str  # 'image' | 'pdf' | 'paste'
+    source_type: str = Field(max_length=10)  # 'image' | 'pdf' | 'paste'
     simplified: bool = False
     complexity_score: Optional[float] = None
     # Input-only field, not stored on ReadingSession itself — drives
@@ -58,6 +58,10 @@ def _upsert_word_repeat_log(db: Session, user_id: str, words: List[dict]):
         word = item.get("word", "").strip().lower()
         label = item.get("label", "")
         if not word or label != "Hard":
+            continue
+        if len(word) > 100:
+            # word_repeat_log.word is VARCHAR(100); a longer token is
+            # OCR/paste noise, not vocabulary, and would fail the insert
             continue
 
         existing = (

@@ -6,15 +6,24 @@ This module contains the SQLAlchemy models used by LexiMind,
 including users, saved documents, writing sessions, reading
 sessions, and word-repeat logs.
 
-The models currently use SQLite for local development and are
-designed to support the planned PostgreSQL migration.
+The database is PostgreSQL, configured through the DATABASE_URL
+environment variable (see backend/.env.example). If DATABASE_URL is
+not set, a local SQLite file (backend/dev.db) is used instead so the
+app still starts for quick local experiments.
+
+Tables are created on startup by init_db(). create_all() only creates
+missing tables - it does not alter existing ones - so column changes
+need a manual migration on an existing database.
 
 STATUS: ACTIVE
 """
 
 import os
 import uuid
+import logging
 import datetime
+
+from dotenv import load_dotenv
 
 from sqlalchemy import (
     Column,
@@ -24,6 +33,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     Date,
+    Text,
     UniqueConstraint,
     create_engine,
 )
@@ -60,7 +70,7 @@ class SavedDocument(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, nullable=False, index=True)
     title = Column(String(150), default="Untitled Draft")
-    content = Column(String(50000), default="")
+    content = Column(Text, default="")
     template = Column(String(50), nullable=True)
     created_at = Column(
         DateTime,
@@ -150,13 +160,49 @@ class WordBank(Base):
     )
 
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_DB_PATH = os.path.join(_BASE_DIR, "dev.db")
+load_dotenv()
 
-engine = create_engine(
-    f"sqlite:///{_DB_PATH}",
-    connect_args={"check_same_thread": False},
-)
+logger = logging.getLogger(__name__)
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SQLITE_PATH = os.path.join(_BASE_DIR, "dev.db")
+
+
+def _normalize_database_url(url: str) -> str:
+    """Point postgres URLs at the psycopg (v3) driver. Hosting
+    providers often hand out postgres:// or postgresql:// URLs, which
+    SQLAlchemy would otherwise map to psycopg2."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+def make_engine(url: str):
+    if url.startswith("sqlite"):
+        return create_engine(url, connect_args={"check_same_thread": False})
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        # DateTime columns store UTC without a timezone. Pinning the
+        # session to UTC stops Postgres from shifting timestamps into
+        # the server's local timezone.
+        connect_args={"options": "-c timezone=utc"},
+    )
+
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if DATABASE_URL:
+    DATABASE_URL = _normalize_database_url(DATABASE_URL)
+else:
+    DATABASE_URL = f"sqlite:///{SQLITE_PATH}"
+    logger.warning(
+        "DATABASE_URL is not set - using local SQLite at %s. "
+        "Set DATABASE_URL in backend/.env to use PostgreSQL.",
+        SQLITE_PATH,
+    )
+
+engine = make_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(
     autocommit=False,

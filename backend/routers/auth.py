@@ -40,7 +40,7 @@ ALGORITHM = "HS256"
 
 
 class RegisterRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=100)
     email: EmailStr
     password: str =Field(min_length=8)
 
@@ -63,8 +63,8 @@ class UserOut(BaseModel):
         from_attributes = True
 
 class PreferencesUpdate(BaseModel):
-    pref_font: Optional[str] = None
-    pref_overlay: Optional[str] = None
+    pref_font: Optional[str] = Field(default=None, max_length=50)
+    pref_overlay: Optional[str] = Field(default=None, max_length=7)
     pref_font_size: Optional[int] = None
     pref_dark_mode: Optional[bool] = None
 

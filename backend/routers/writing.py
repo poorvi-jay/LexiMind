@@ -20,7 +20,7 @@ STATUS: ACTIVE
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.models_temp import get_db, SavedDocument, WritingSession, User
@@ -42,9 +42,9 @@ class DraftResponse(BaseModel):
 
 
 class SaveDocRequest(BaseModel):
-    title: str
+    title: str = Field(max_length=150)
     content: str
-    template: str | None = None
+    template: str | None = Field(default=None, max_length=50)
 
 
 class DocumentSummary(BaseModel):
@@ -76,7 +76,7 @@ class DeleteResponse(BaseModel):
 
 
 class TemplateLogRequest(BaseModel):
-    template: str  # "essay" | "email" | "report"
+    template: str = Field(max_length=50)  # "essay" | "email" | "report"
 
 
 class TemplateLogResponse(BaseModel):
