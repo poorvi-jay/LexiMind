@@ -1,18 +1,19 @@
 """
 Auth Router — Owner: M2 (F01-F04)
-Exposes /auth/register, /auth/login, /auth/me, /auth/preferences.
+Exposes /auth/register, /auth/login, /auth/me, /auth/me/preferences.
 
 STATUS:
 - /auth/register (F01): IMPLEMENTED (Task 7)
 - /auth/login (F02): IMPLEMENTED (Task 7)
 - /auth/me (F03): IMPLEMENTED (Task 8)
-- /auth/preferences (F04): IMPLEMENTED (Task 8)
+- /auth/me/preferences (F04): IMPLEMENTED (Task 8)
 """
+
 import os
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from jose import jwt
@@ -29,13 +30,19 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
 SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    # B8: fail at startup with a clear message, not at the first login
+    raise RuntimeError(
+        "SECRET_KEY is not set. Add it to backend/.env "
+        "(generate one with: python -c \"import secrets; print(secrets.token_hex(32))\")"
+    )
 ALGORITHM = "HS256"
 
 
 class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
-    password: str
+    password: str =Field(min_length=8)
 
 
 class LoginRequest(BaseModel):
@@ -79,12 +86,15 @@ def create_access_token(user_id: str) -> str:
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False) #note: auto_error=False allows us to handle missing tokens gracefully in get_current_user
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+
     token = credentials.credentials
     """
     Shared dependency for ALL protected routes in the project.

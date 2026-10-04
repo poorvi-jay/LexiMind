@@ -16,8 +16,23 @@ async function request(method, path, body = null, isFormData = false) {
   })
 
   if (!res.ok) {
+    // B5: an authenticated request was rejected -> session expired/invalid.
+    // Login/register also return 401 (wrong password), so exclude them.
+    // getToken() === token guards against a late 401 from an old token
+    // logging out someone who has just logged in again.
+    if (
+      res.status === 401 &&
+      token &&
+      getToken() === token &&
+      path !== '/auth/login' &&
+      path !== '/auth/register'
+    ) {
+      window.dispatchEvent(new Event('auth-expired'))
+    }
     const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(err.detail || 'Request failed')
+    const error = new Error(err.detail || 'Request failed')
+    error.status = res.status
+    throw error
   }
 
   return res.json()
@@ -28,5 +43,6 @@ export const api = {
   post: (path, body) => request('POST', path, body),
   postForm: (path, formData) => request('POST', path, formData, true),
   patch: (path, body) => request('PATCH', path, body),
+  put: (path, body) => request('PUT', path, body),
   delete: path => request('DELETE', path),
 }

@@ -1,17 +1,21 @@
 """
-Writing Router — Owner: M2 (F25, F31, F32, F48)
-Exposes /writing/autosave (F31), /writing/documents CRUD (F32),
-and /writing/template-used (F48).
+Writing Router
+==============
 
-STATUS:
-- /writing/autosave (F31): IMPLEMENTED (Task 14)
-- /writing/documents CRUD (F32): IMPLEMENTED (Task 15)
-- /writing/template-used (F48): IMPLEMENTED (Task 18)
+Provides the writing-related API endpoints for autosave, saved
+document CRUD operations, and template usage tracking.
 
-Design note: autosave maintains ONE "current draft" row per user in
-saved_documents, explicitly flagged via is_draft=True. Named saves
-(via Save As) are always created with is_draft=False, so autosave
-can never touch them.
+Endpoints:
+- /writing/autosave: Manage the user's current writing draft.
+- /writing/documents: Create, list, update, and delete saved documents.
+- /writing/template-used: Record template usage.
+
+Design note: autosave maintains one current draft row per user in
+saved_documents, identified by is_draft=True. Named saves created
+through Save As use is_draft=False and are kept separate from the
+autosave draft.
+
+STATUS: ACTIVE
 """
 from datetime import datetime
 
@@ -129,12 +133,14 @@ async def list_documents(
     """F32: List all of the user's saved documents, most recent first."""
     docs = (
         db.query(SavedDocument)
-        .filter(SavedDocument.user_id == current_user.id)
+        .filter(
+            SavedDocument.user_id == current_user.id,
+            SavedDocument.is_draft.is_not(True),
+        )
         .order_by(SavedDocument.updated_at.desc())
         .all()
     )
     return docs
-
 
 @router.post("/documents", response_model=SaveDocResponse)
 async def save_document(
@@ -155,6 +161,35 @@ async def save_document(
         is_draft=False,
     )
     db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return {"id": doc.id}
+
+
+@router.put("/documents/{doc_id}", response_model=SaveDocResponse)
+async def update_document(
+    doc_id: str,
+    req: SaveDocRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    B6 fix: update an existing named document in place, instead of
+    always inserting a new row. Scoped to current_user.id, same
+    pattern as every other document endpoint in this file - a
+    guessed/other user's doc_id returns 404, not another user's data.
+    """
+    doc = (
+        db.query(SavedDocument)
+        .filter(SavedDocument.id == doc_id, SavedDocument.user_id == current_user.id)
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    doc.title = req.title or doc.title
+    doc.content = req.content
+    doc.template = req.template
     db.commit()
     db.refresh(doc)
     return {"id": doc.id}
