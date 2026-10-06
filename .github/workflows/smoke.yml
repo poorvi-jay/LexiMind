@@ -1,0 +1,41 @@
+# Post-deploy smoke test — Owner: M4 (Phase 8).
+# Run manually from the Actions tab after each Railway/Vercel deploy.
+name: Smoke test (deployed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Railway backend URL, e.g. https://leximind-api.up.railway.app"
+        required: true
+      frontend_origin:
+        description: "Vercel URL (checks CORS_ORIGINS), e.g. https://leximind.vercel.app"
+        required: false
+      skip:
+        description: "Space-separated steps to skip (e.g. 'ocr simplify')"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install httpx==0.28.1 pillow==12.3.0
+      - name: Smoke test
+        env:
+          API_URL: ${{ inputs.api_url }}
+          FRONTEND_ORIGIN: ${{ inputs.frontend_origin }}
+          SKIP_STEPS: ${{ inputs.skip }}
+        run: |
+          ARGS=(--api "$API_URL")
+          [ -n "$FRONTEND_ORIGIN" ] && ARGS+=(--origin "$FRONTEND_ORIGIN")
+          [ -n "$SKIP_STEPS" ] && ARGS+=(--skip $SKIP_STEPS)
+          python tests/smoke/smoke_test.py "${ARGS[@]}"

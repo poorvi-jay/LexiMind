@@ -1,0 +1,33 @@
+# Nixpacks fallback build for the backend — Owner: M4.
+# NOT used while railway.toml has builder = "DOCKERFILE" (Railway also
+# prefers a Dockerfile whenever one exists). Kept in sync with the
+# Dockerfile so we can switch builders without rediscovering:
+#   poppler-utils, a JRE for LanguageTool, CPU-only torch,
+#   HF_HUB_DISABLE_XET + no hf-xet, and build-time model pre-warming.
+
+providers = ["python"]
+
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.13"
+HF_HUB_DISABLE_XET = "1"
+HF_HOME = "/app/.models/huggingface"
+EASYOCR_MODULE_PATH = "/app/.models/easyocr"
+NLTK_DATA = "/app/.models/nltk_data"
+LTP_PATH = "/app/.models/languagetool"
+PIP_NO_CACHE_DIR = "1"
+
+[phases.setup]
+aptPkgs = ["poppler-utils", "default-jre-headless", "libglib2.0-0", "libgl1"]
+
+[phases.install]
+cmds = [
+  "python -m venv --copies /opt/venv",
+  ". /opt/venv/bin/activate && pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1 torchvision==0.27.1",
+  ". /opt/venv/bin/activate && pip install -r requirements.txt && pip install pdf2image==1.17.0 psycopg2-binary==2.9.10 alembic==1.16.5 && pip uninstall -y hf-xet",
+]
+
+[phases.build]
+cmds = [". /opt/venv/bin/activate && python scripts/prewarm_models.py"]
+
+[start]
+cmd = "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips='*'"

@@ -1,0 +1,224 @@
+# LexiMind CI — Owner: M4 (AC-42: pytest on every push).
+#
+# Phase 1 status (SQLite -> Postgres, M3): IN FLUX. Until it lands:
+#   * `m3_inflight` tests (Sessions / Analytics / Word Bank) run but are
+#     non-blocking, and the Postgres job is non-blocking.
+#   * When the migration merges: delete the two `continue-on-error`
+#     lines marked "PHASE 1" below and drop `-m "not m3_inflight"`.
+name: CI
+
+on:
+  # Every push to every branch (m3-dev, prathiksha-dev, main, ...).
+  # Same-repo PRs show these push checks, so no separate pull_request
+  # trigger (it would run everything twice).
+  push:
+  workflow_dispatch:
+    inputs:
+      run_model_tests:
+        description: "Also run real-model tests (LanguageTool, DistilGPT-2)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+  HF_HUB_DISABLE_XET: "1"
+  # Throwaway value; auth.py refuses to import without one.
+  SECRET_KEY: ci-only-not-a-real-secret
+  NLTK_DATA: ${{ github.workspace }}/.nltk_data
+
+jobs:
+  backend-tests:
+    name: Backend tests (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            tests/requirements-test.txt
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1 torchvision==0.27.1
+          pip install -r requirements.txt -r tests/requirements-test.txt
+          pip uninstall -y hf-xet
+
+      - name: Cache NLTK data
+        uses: actions/cache@v4
+        with:
+          path: .nltk_data
+          key: nltk-cmudict-wordnet-v1
+
+      - name: Fetch NLTK / spaCy data
+        run: python scripts/prewarm_models.py --skip easyocr distilgpt2 languagetool
+
+      - name: pytest — stable suite (blocking)
+        run: pytest -m "not m3_inflight" --junitxml=reports/stable.xml
+
+      - name: pytest — m3_inflight suite (non-blocking until Phase 1 lands)
+        continue-on-error: true # PHASE 1: remove once M3's migration is on main
+        run: pytest -m m3_inflight --junitxml=reports/m3_inflight.xml
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports-sqlite
+          path: reports/
+
+  backend-tests-postgres:
+    name: Backend tests (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true # PHASE 1: remove once M3's migration is on main
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: leximind_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/leximind_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            tests/requirements-test.txt
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1 torchvision==0.27.1
+          pip install -r requirements.txt -r tests/requirements-test.txt
+          pip uninstall -y hf-xet
+
+      - name: Fetch NLTK / spaCy data
+        run: python scripts/prewarm_models.py --skip easyocr distilgpt2 languagetool
+
+      # Once alembic lands, also prove the migrations themselves apply
+      # cleanly to an empty database (tests build schema from the ORM).
+      - name: alembic upgrade head (if migrations exist)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/leximind_test
+        run: |
+          CFG=$(ls alembic.ini backend/alembic.ini 2>/dev/null | head -n1 || true)
+          if [ -n "$CFG" ]; then
+            pip install alembic psycopg2-binary
+            alembic -c "$CFG" upgrade head
+          else
+            echo "No alembic.ini yet — skipping (Phase 1 in flight)"
+          fi
+
+      - name: pytest — full suite on Postgres
+        run: pytest --junitxml=reports/postgres.xml
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports-postgres
+          path: reports/
+
+  backend-model-tests:
+    name: Real-model tests (manual / nightly)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_model_tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUN_MODEL_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1 torchvision==0.27.1
+          pip install -r requirements.txt -r tests/requirements-test.txt
+          pip uninstall -y hf-xet
+      - name: Pre-warm models
+        run: python scripts/prewarm_models.py --skip easyocr
+      - name: pytest -m models
+        run: pytest -m models
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint (non-blocking — 3 pre-existing errors in WritingPage.jsx, flagged to M2)
+        continue-on-error: true
+        run: npm run lint
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: https://example.invalid
+
+  docker:
+    name: Backend Docker image builds
+    # The image is ~3 GB with baked models: only build it where it
+    # gates a deploy (main) or when explicitly requested.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: backend-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space for the model-heavy image
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push — Railway builds its own copy)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: leximind-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Container boots and /health responds
+        run: |
+          docker run -d --name api -p 8000:8000 -e SECRET_KEY=ci-only -e PORT=8000 leximind-backend:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/health; then echo; exit 0; fi
+            sleep 3
+          done
+          docker logs api
+          exit 1

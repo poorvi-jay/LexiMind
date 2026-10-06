@@ -1,0 +1,34 @@
+# Railway — LexiMind FastAPI backend. Owner: M4.
+# Frontend is on Vercel (vercel.json); this service only builds the backend.
+# Schema: https://railway.com/railway.schema.json
+
+[build]
+# Dockerfile is the source of truth (poppler, JRE, CPU-only torch,
+# baked model caches). nixpacks.toml is kept as a fallback builder:
+# switch to builder = "NIXPACKS" only if the Dockerfile build breaks.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+# Don't rebuild the 3 GB image for frontend-only / docs-only commits.
+watchPatterns = [
+  "backend/**",
+  "data/**",
+  "scripts/**",
+  "requirements.txt",
+  "Dockerfile",
+  ".dockerignore",
+  "railway.toml",
+  "alembic.ini",
+  "alembic/**",
+]
+
+[deploy]
+# Runs once per deploy in its own container, before traffic switches.
+# Postgres (M3 migration landed): applies `alembic upgrade head` against
+# the DATABASE_URL injected by Railway's Postgres addon.
+# SQLite / no alembic.ini yet: logs and skips, so this is safe today.
+preDeployCommand = '''sh -c 'CFG=$(ls alembic.ini backend/alembic.ini 2>/dev/null | head -n1); if [ -n "$DATABASE_URL" ] && [ -n "$CFG" ]; then echo "[predeploy] alembic -c $CFG upgrade head"; alembic -c "$CFG" upgrade head; else echo "[predeploy] no DATABASE_URL or alembic.ini - skipping migrations"; fi' '''
+healthcheckPath = "/health"
+# torch + spaCy + classifier import takes a while on a cold container.
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

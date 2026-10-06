@@ -1,0 +1,4 @@
+# Test-only dependencies (installed on top of ../requirements.txt)
+pytest==8.4.2
+# Only needed when TEST_DATABASE_URL points at Postgres (CI postgres job)
+psycopg[binary]==3.2.10
