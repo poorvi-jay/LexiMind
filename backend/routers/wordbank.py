@@ -36,7 +36,7 @@ async def get_drill_words(
             WordBank.user_id == current_user.id,
             WordBank.next_review <= datetime.date.today(),
         )
-        .order_by(WordBank.next_review.asc())
+        .order_by(WordBank.next_review.asc().nulls_last())
         .limit(20)
         .all()
     )
@@ -160,7 +160,7 @@ async def list_all_words(
     words = (
         db.query(WordBank)
         .filter(WordBank.user_id == current_user.id)
-        .order_by(WordBank.next_review.asc())
+        .order_by(WordBank.next_review.asc().nulls_last())
         .all()
     )
     return [

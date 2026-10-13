@@ -56,7 +56,7 @@ async def get_reading_history(
     )
     return [
         {
-            "id": s.id,
+            "id": str(s.id),
             "date": s.date.isoformat() if s.date else None,
             "wpm": s.wpm,
             "total_words": s.total_words,
@@ -102,7 +102,7 @@ async def get_writing_history(
 
     return [
         {
-            "id": s.id,
+            "id": str(s.id),
             "date": s.date.isoformat() if s.date else None,
             "word_count": s.word_count or 0,
             "spell_error_count": s.spell_error_count or 0,

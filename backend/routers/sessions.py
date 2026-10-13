@@ -144,7 +144,7 @@ async def log_reading_session(
     db.commit()
     db.refresh(session)
 
-    return {"logged": True, "session_id": session.id}
+    return {"logged": True, "session_id": str(session.id)}
 
 
 # ── Writing session (F38) ────────────────────────────────────────────
@@ -175,4 +175,4 @@ async def log_writing_session(
     db.commit()
     db.refresh(session)
 
-    return {"logged": True, "session_id": session.id}
+    return {"logged": True, "session_id": str(session.id)}

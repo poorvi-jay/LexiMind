@@ -10,17 +10,18 @@ STATUS:
 """
 
 import os
+import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, BeforeValidator, EmailStr, Field
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from jose import jwt
 
 from backend.models_temp import get_db, User
 
-from typing import Optional
+from typing import Annotated, Optional
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError
 
@@ -50,8 +51,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# users.id is a native UUID; the API has always sent ids as strings.
+StrId = Annotated[str, BeforeValidator(str)]
+
+
 class UserOut(BaseModel):
-    id: str
+    id: StrId
     name: str
     email: str
     pref_font: str
@@ -78,10 +83,11 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
-def create_access_token(user_id: str) -> str:
-    """JWT payload: { sub: user_id, exp: now + 24h }, per Build Guide 4.2."""
+def create_access_token(user_id: uuid.UUID) -> str:
+    """JWT payload: { sub: user_id, exp: now + 24h }, per Build Guide 4.2.
+    sub must be a string, so the UUID is converted here."""
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),
         "exp": datetime.utcnow() + timedelta(hours=24),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -104,11 +110,18 @@ async def get_current_user(
     """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if user_id is None:
+        sub = payload.get("sub")
+        if sub is None:
             raise HTTPException(status_code=401, detail="Invalid token.")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+    # users.id is a UUID column; a sub that isn't a UUID would otherwise
+    # surface as a 500 from the query below.
+    try:
+        user_id = uuid.UUID(str(sub))
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token.")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
