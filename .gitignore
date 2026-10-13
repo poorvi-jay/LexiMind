@@ -9,6 +9,7 @@ __pycache__/
 venv/
 dev.db
 *.db
+*.db.pre-pg-backup
 
 # Node
 node_modules/
