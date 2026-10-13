@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import ProtectedRoute from './components/ProtectedRoute.jsx'
 
 import HomePage from './pages/HomePage.jsx'
 import NavBar from './components/NavBar.jsx'
@@ -14,12 +15,12 @@ export default function App() {
     <div className="min-h-screen">
       <NavBar />
       <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/reading" element={<ReadingPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/writing" element={<WritingPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/wordbank/drill" element={<WordBankDrillPage />} />
+        <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+        <Route path="/reading" element={<ProtectedRoute><ReadingPage /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+        <Route path="/writing" element={<ProtectedRoute><WritingPage /></ProtectedRoute>} />
+        <Route path="/analytics" element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
+        <Route path="/wordbank/drill" element={<ProtectedRoute><WordBankDrillPage /></ProtectedRoute>} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
