@@ -7,20 +7,22 @@ including users, saved documents, writing sessions, reading
 sessions, and word-repeat logs.
 
 The database is PostgreSQL, configured through the DATABASE_URL
-environment variable (see backend/.env.example). If DATABASE_URL is
-not set, a local SQLite file (backend/dev.db) is used instead so the
-app still starts for quick local experiments.
+environment variable (see backend/.env.example). The app refuses to
+start without it.
 
-Tables are created on startup by init_db(). create_all() only creates
-missing tables - it does not alter existing ones - so column changes
-need a manual migration on an existing database.
+Every id is a native PostgreSQL UUID. Every user_id is a foreign key
+to users.id with ON DELETE CASCADE, so deleting a user removes their
+documents, sessions and word bank.
+
+Alembic owns the schema (alembic/versions). Any column change here
+needs a new revision: alembic revision --autogenerate, review it,
+then alembic upgrade head.
 
 STATUS: ACTIVE
 """
 
 import os
 import uuid
-import logging
 import datetime
 
 from dotenv import load_dotenv
@@ -35,8 +37,12 @@ from sqlalchemy import (
     Date,
     Text,
     UniqueConstraint,
+    ForeignKey,
     create_engine,
+    inspect,
+    text,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -45,7 +51,12 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     name = Column(String(100))
     email = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
@@ -67,8 +78,18 @@ class User(Base):
 class SavedDocument(Base):
     __tablename__ = "saved_documents"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, nullable=False, index=True)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     title = Column(String(150), default="Untitled Draft")
     content = Column(Text, default="")
     template = Column(String(50), nullable=True)
@@ -87,8 +108,18 @@ class SavedDocument(Base):
 class WritingSession(Base):
     __tablename__ = "writing_sessions"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, nullable=False, index=True)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     date = Column(
         DateTime,
         default=lambda: datetime.datetime.now(datetime.UTC),
@@ -103,8 +134,18 @@ class WritingSession(Base):
 class ReadingSession(Base):
     __tablename__ = "reading_sessions"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, nullable=False, index=True)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     date = Column(
         DateTime,
         default=lambda: datetime.datetime.now(datetime.UTC),
@@ -122,8 +163,18 @@ class ReadingSession(Base):
 class WordRepeatLog(Base):
     __tablename__ = "word_repeat_log"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, nullable=False, index=True)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     word = Column(String(100))
     repeat_count = Column(Integer, default=0)
     difficulty_label = Column(String(10))
@@ -136,8 +187,18 @@ class WordRepeatLog(Base):
 class WordBank(Base):
     __tablename__ = "word_bank"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, nullable=False, index=True)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     word = Column(String(100))
     difficulty_label = Column(String(10))
     sm2_ef = Column(Float, default=2.5)
@@ -162,11 +223,6 @@ class WordBank(Base):
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
-
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SQLITE_PATH = os.path.join(_BASE_DIR, "dev.db")
-
 
 def _normalize_database_url(url: str) -> str:
     """Point postgres URLs at the psycopg (v3) driver. Hosting
@@ -178,31 +234,22 @@ def _normalize_database_url(url: str) -> str:
     return url
 
 
-def make_engine(url: str):
-    if url.startswith("sqlite"):
-        return create_engine(url, connect_args={"check_same_thread": False})
-    return create_engine(
-        url,
-        pool_pre_ping=True,
-        # DateTime columns store UTC without a timezone. Pinning the
-        # session to UTC stops Postgres from shifting timestamps into
-        # the server's local timezone.
-        connect_args={"options": "-c timezone=utc"},
-    )
-
-
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-if DATABASE_URL:
-    DATABASE_URL = _normalize_database_url(DATABASE_URL)
-else:
-    DATABASE_URL = f"sqlite:///{SQLITE_PATH}"
-    logger.warning(
-        "DATABASE_URL is not set - using local SQLite at %s. "
-        "Set DATABASE_URL in backend/.env to use PostgreSQL.",
-        SQLITE_PATH,
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Add it to backend/.env "
+        "(see backend/.env.example)."
     )
+DATABASE_URL = _normalize_database_url(DATABASE_URL)
 
-engine = make_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    # DateTime columns store UTC without a timezone. Pinning the
+    # session to UTC stops Postgres from shifting timestamps into
+    # the server's local timezone.
+    connect_args={"options": "-c timezone=utc"},
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -212,10 +259,13 @@ SessionLocal = sessionmaker(
 
 
 def init_db():
-    """Create all tables if they don't already exist. Called once at
-    app startup in main.py — safe to call repeatedly, no-op if tables
-    already exist."""
-    Base.metadata.create_all(bind=engine)
+    """Called once at app startup in main.py. Alembic owns the schema,
+    so this only checks that the migrations have been applied and
+    fails with a clear message if they haven't."""
+    if not inspect(engine).has_table("alembic_version"):
+        raise RuntimeError(
+            "Database schema not found. Run: alembic upgrade head"
+        )
 
 
 def get_db():
