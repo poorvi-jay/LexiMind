@@ -128,7 +128,11 @@ async def get_difficult_words(
     words = (
         db.query(WordRepeatLog)
         .filter(WordRepeatLog.user_id == current_user.id)
-        .order_by(WordRepeatLog.repeat_count.desc())
+        .order_by(
+            WordRepeatLog.repeat_count.desc(),
+            WordRepeatLog.last_seen.desc(),
+            WordRepeatLog.word.asc(),
+        )
         .limit(10)
         .all()
     )
