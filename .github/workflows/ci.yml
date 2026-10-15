@@ -1,0 +1,204 @@
+# LexiMind CI — Owner: M4 (AC-42: pytest on every push).
+#
+# The backend is PostgreSQL-only (M3's migration), so tests run against
+# a Postgres 16 service container, with the schema built by the real
+# Alembic migrations (tests/conftest.py runs `alembic upgrade head`).
+name: CI
+
+on:
+  # Every push to every branch. Same-repo PRs show these push checks,
+  # so there's no separate pull_request trigger (it would run twice).
+  push:
+  workflow_dispatch:
+    inputs:
+      run_model_tests:
+        description: "Also run real-model tests (LanguageTool, DistilGPT-2)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+  HF_HUB_DISABLE_XET: "1"
+  # Throwaway value; auth.py refuses to import without one.
+  SECRET_KEY: ci-only-not-a-real-secret
+  NLTK_DATA: ${{ github.workspace }}/.nltk_data
+  # Database name must contain "test": the suite wipes it.
+  TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/leximind_test
+
+jobs:
+  backend-tests:
+    name: Backend tests (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: leximind_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            tests/requirements-test.txt
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1 torchvision==0.27.1
+          pip install -r requirements.txt -r tests/requirements-test.txt
+          pip uninstall -y hf-xet
+
+      - name: Cache NLTK data
+        uses: actions/cache@v4
+        with:
+          path: .nltk_data
+          key: nltk-cmudict-wordnet-v1
+
+      - name: Fetch NLTK / spaCy data
+        run: python scripts/prewarm_models.py --skip easyocr distilgpt2 languagetool
+
+      - name: Migrations have no un-generated model changes
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          alembic upgrade head
+          # Fails if models_temp.py was edited without a new revision.
+          alembic check
+
+      - name: pytest
+        run: pytest --junitxml=reports/pytest.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: reports/
+
+  backend-model-tests:
+    name: Real-model tests (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_model_tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: leximind_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RUN_MODEL_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1 torchvision==0.27.1
+          pip install -r requirements.txt -r tests/requirements-test.txt
+          pip uninstall -y hf-xet
+      - name: Pre-warm models
+        run: python scripts/prewarm_models.py --skip easyocr
+      - name: pytest -m models
+        run: pytest -m models
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint (non-blocking — pre-existing errors in WritingPage.jsx, flagged to M2)
+        continue-on-error: true
+        run: npm run lint
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: https://example.invalid
+
+  docker:
+    name: Backend Docker image builds and boots
+    # The image is ~3 GB with baked models: only build it where it
+    # gates a deploy (main) or when explicitly requested.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: backend-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: leximind
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space for the model-heavy image
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push — Railway builds its own copy)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: leximind-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Migrate, boot, and hit /health (same steps as Railway)
+        env:
+          # Railway hands out a plain postgresql:// URL; the app converts it.
+          DB: postgresql://postgres:postgres@127.0.0.1:5432/leximind
+        run: |
+          docker run --rm --network host -e DATABASE_URL="$DB" -e SECRET_KEY=ci-only \
+            leximind-backend:ci alembic upgrade head
+          docker run -d --name api --network host -e DATABASE_URL="$DB" \
+            -e SECRET_KEY=ci-only -e PORT=8000 leximind-backend:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/health; then echo; exit 0; fi
+            sleep 3
+          done
+          docker logs api
+          exit 1
