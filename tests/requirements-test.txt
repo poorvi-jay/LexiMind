@@ -1,0 +1,3 @@
+# Test-only dependencies (installed on top of ../requirements.txt,
+# which already has psycopg and alembic).
+pytest==8.4.2
