@@ -1,0 +1,20 @@
+# Keep the backend image small and secret-free.
+.git
+.github
+.env
+.env.*
+**/.env
+**/*.db
+**/__pycache__
+**/*.py[cod]
+.venv
+venv
+frontend
+tests
+pytest.ini
+**/node_modules
+.vscode
+.idea
+.DS_Store
+# Training-only data; the trained classifier.joblib is still copied
+backend/ml/data/complex
