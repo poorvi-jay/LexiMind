@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -42,7 +42,7 @@ class ReadingSessionCreate(BaseModel):
     hard_word_count: int
     repeat_count: int = 0
     duration_seconds: int
-    source_type: str  # 'image' | 'pdf' | 'paste'
+    source_type: str = Field(max_length=10)  # 'image' | 'pdf' | 'paste'
     simplified: bool = False
     complexity_score: Optional[float] = None
     # Input-only field, not stored on ReadingSession itself — drives
@@ -51,15 +51,29 @@ class ReadingSessionCreate(BaseModel):
 
 
 def _upsert_word_repeat_log(db: Session, user_id: str, words: List[dict]):
-    """For each HARD-labeled word in this session, find-or-create its
-    WordRepeatLog row and increment repeat_count. Non-Hard words are
-    skipped entirely — see module docstring for reasoning."""
+    """For each distinct HARD-labeled word in this session, find-or-create its
+    WordRepeatLog row and add 1 to repeat_count (once per session, however many
+    times the word appears in the text). Non-Hard words are skipped entirely --
+    see module docstring for reasoning.
+
+    Distinct words only: the session uses autoflush=False, so a row added earlier
+    in this loop is invisible to the next query. Without de-duplication the same
+    new word would get one row per occurrence, and a word crossing the Word Bank
+    threshold would be inserted twice (unique-constraint 500)."""
+    distinct = []
+    seen = set()
     for item in words:
         word = item.get("word", "").strip().lower()
-        label = item.get("label", "")
-        if not word or label != "Hard":
+        if not word or item.get("label", "") != "Hard" or word in seen:
             continue
+        if len(word) > 100:
+            # word_repeat_log.word is VARCHAR(100); a longer token is
+            # OCR/paste noise, not vocabulary, and would fail the insert
+            continue
+        seen.add(word)
+        distinct.append(word)
 
+    for word in distinct:
         existing = (
             db.query(WordRepeatLog)
             .filter(WordRepeatLog.user_id == user_id, WordRepeatLog.word == word)
@@ -67,7 +81,7 @@ def _upsert_word_repeat_log(db: Session, user_id: str, words: List[dict]):
         )
         if existing:
             existing.repeat_count += 1
-            existing.difficulty_label = label
+            existing.difficulty_label = "Hard"
             existing.last_seen = datetime.datetime.utcnow()
             new_count = existing.repeat_count
         else:
@@ -75,12 +89,13 @@ def _upsert_word_repeat_log(db: Session, user_id: str, words: List[dict]):
                 user_id=user_id,
                 word=word,
                 repeat_count=1,
-                difficulty_label=label,
+                difficulty_label="Hard",
                 last_seen=datetime.datetime.utcnow(),
             ))
             new_count = 1
 
-        _maybe_add_to_word_bank(db, user_id, word, label, new_count)
+        _maybe_add_to_word_bank(db, user_id, word, "Hard", new_count)
+
 
 def _maybe_add_to_word_bank(db: Session, user_id: str, word: str, label: str, repeat_count: int):
     """F49: once a word's repeat_count crosses 3, add it to word_bank
@@ -140,7 +155,7 @@ async def log_reading_session(
     db.commit()
     db.refresh(session)
 
-    return {"logged": True, "session_id": session.id}
+    return {"logged": True, "session_id": str(session.id)}
 
 
 # ── Writing session (F38) ────────────────────────────────────────────
@@ -171,4 +186,4 @@ async def log_writing_session(
     db.commit()
     db.refresh(session)
 
-    return {"logged": True, "session_id": session.id}
+    return {"logged": True, "session_id": str(session.id)}

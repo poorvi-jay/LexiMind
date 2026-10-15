@@ -17,16 +17,21 @@ autosave draft.
 
 STATUS: ACTIVE
 """
+import uuid
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator, Field
 from sqlalchemy.orm import Session
 
 from backend.models_temp import get_db, SavedDocument, WritingSession, User
 from backend.routers.auth import get_current_user
 
 router = APIRouter(prefix="/writing", tags=["Writing"])
+
+# Document ids are native UUIDs; the API has always sent them as strings.
+StrId = Annotated[str, BeforeValidator(str)]
 
 
 class AutosaveRequest(BaseModel):
@@ -42,13 +47,13 @@ class DraftResponse(BaseModel):
 
 
 class SaveDocRequest(BaseModel):
-    title: str
+    title: str = Field(max_length=150)
     content: str
-    template: str | None = None
+    template: str | None = Field(default=None, max_length=50)
 
 
 class DocumentSummary(BaseModel):
-    id: str
+    id: StrId
     title: str
     updated_at: datetime
 
@@ -57,7 +62,7 @@ class DocumentSummary(BaseModel):
 
 
 class DocumentFull(BaseModel):
-    id: str
+    id: StrId
     title: str
     content: str
     template: str | None
@@ -68,7 +73,7 @@ class DocumentFull(BaseModel):
 
 
 class SaveDocResponse(BaseModel):
-    id: str
+    id: StrId
 
 
 class DeleteResponse(BaseModel):
@@ -76,14 +81,23 @@ class DeleteResponse(BaseModel):
 
 
 class TemplateLogRequest(BaseModel):
-    template: str  # "essay" | "email" | "report"
+    template: str = Field(max_length=50)  # "essay" | "email" | "report"
 
 
 class TemplateLogResponse(BaseModel):
     logged: bool
 
 
-def _get_or_create_draft(db: Session, user_id: str) -> SavedDocument:
+def _parse_doc_id(doc_id: str) -> uuid.UUID:
+    """A doc_id that isn't a UUID can't match any row, so it gets the
+    same 404 as an unknown id instead of a database error."""
+    try:
+        return uuid.UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+
+def _get_or_create_draft(db: Session, user_id: uuid.UUID) -> SavedDocument:
     """
     Finds the user's dedicated autosave draft row (is_draft=True),
     or creates one. Intentionally separate from any named document
@@ -181,7 +195,7 @@ async def update_document(
     """
     doc = (
         db.query(SavedDocument)
-        .filter(SavedDocument.id == doc_id, SavedDocument.user_id == current_user.id)
+        .filter(SavedDocument.id == _parse_doc_id(doc_id), SavedDocument.user_id == current_user.id)
         .first()
     )
     if not doc:
@@ -204,7 +218,7 @@ async def get_document(
     """F32: Load a specific saved document by id."""
     doc = (
         db.query(SavedDocument)
-        .filter(SavedDocument.id == doc_id, SavedDocument.user_id == current_user.id)
+        .filter(SavedDocument.id == _parse_doc_id(doc_id), SavedDocument.user_id == current_user.id)
         .first()
     )
     if not doc:
@@ -221,7 +235,7 @@ async def delete_document(
     """F32: Delete a saved document."""
     doc = (
         db.query(SavedDocument)
-        .filter(SavedDocument.id == doc_id, SavedDocument.user_id == current_user.id)
+        .filter(SavedDocument.id == _parse_doc_id(doc_id), SavedDocument.user_id == current_user.id)
         .first()
     )
     if not doc:
