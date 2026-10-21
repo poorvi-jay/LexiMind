@@ -10,6 +10,10 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     # Startup: runs once before the app starts accepting requests
     init_db()
+    # Load EasyOCR off the request path so the first upload doesn't wait ~30s.
+    if os.getenv("OCR_PREWARM", "1") == "1":
+        from backend.services.ocr_service import warm_reader_in_background
+        warm_reader_in_background()
     yield
     # Shutdown: nothing needed yet, but this is where cleanup would go
 

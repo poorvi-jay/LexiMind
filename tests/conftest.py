@@ -59,6 +59,7 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+os.environ.setdefault("OCR_PREWARM", "0")
 
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
